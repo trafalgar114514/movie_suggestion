@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+<<<<<<< codex/enhance-recommendation-algorithm-with-item-based-filtering-n7s1e8
 """将 id.xlsx 中的 genres_cn 写入 movies.genres 字段。
 
 Excel 列格式示例：
@@ -24,6 +25,37 @@ except ImportError as exc:
   raise SystemExit(
     '缺少依赖 openpyxl，请先安装：pip install openpyxl'
   ) from exc
+=======
+"""将 CSV 中的电影类型写入 movies.genres 字段。
+
+CSV 示例：
+genres,id,imdb_id
+"[{'id': 12, 'name': 'Adventure'}, {'id': 16, 'name': 'Animation'}]",2,tt0094675
+"""
+
+import argparse
+import ast
+import csv
+import json
+
+import pymysql
+
+
+def parse_genre_names(raw_genres: str):
+  if not raw_genres:
+    return []
+
+  parsed = ast.literal_eval(raw_genres)
+  if not isinstance(parsed, list):
+    return []
+
+  names = []
+  for item in parsed:
+    if isinstance(item, dict) and item.get('name'):
+      names.append(str(item['name']).strip())
+
+  return names
+>>>>>>> main
 
 
 def ensure_genres_column(conn, database_name: str):
@@ -46,6 +78,7 @@ def ensure_genres_column(conn, database_name: str):
       print('已新增 movies.genres 字段')
 
 
+<<<<<<< codex/enhance-recommendation-algorithm-with-item-based-filtering-n7s1e8
 def parse_genres_cn(genres_cn: str) -> List[str]:
   if genres_cn is None:
     return []
@@ -125,14 +158,51 @@ def import_genres_from_xlsx(conn, xlsx_path: str):
         (genres_json, row['id'], row['imdb_id'])
       )
       updated += cursor.rowcount
+=======
+def import_genres(conn, csv_path: str):
+  updated = 0
+
+  with open(csv_path, 'r', encoding='utf-8-sig', newline='') as f:
+    reader = csv.DictReader(f)
+
+    required_cols = {'genres', 'id', 'imdb_id'}
+    if not required_cols.issubset(set(reader.fieldnames or [])):
+      raise ValueError('CSV 必须包含 genres, id, imdb_id 三列')
+
+    with conn.cursor() as cursor:
+      for row in reader:
+        movie_id = row.get('id')
+        imdb_id = row.get('imdb_id')
+        genre_names = parse_genre_names(row.get('genres', ''))
+
+        if not movie_id and not imdb_id:
+          continue
+
+        genres_json = json.dumps(genre_names, ensure_ascii=False)
+
+        cursor.execute(
+          """
+          UPDATE movies
+          SET genres = %s
+          WHERE id = %s OR imdb_id = %s
+          """,
+          (genres_json, movie_id, imdb_id)
+        )
+        updated += cursor.rowcount
+>>>>>>> main
 
   conn.commit()
   return updated
 
 
 def main():
+<<<<<<< codex/enhance-recommendation-algorithm-with-item-based-filtering-n7s1e8
   parser = argparse.ArgumentParser(description='将 id.xlsx 中的 genres_cn 导入 movies.genres')
   parser.add_argument('--xlsx', required=True, help='Excel 文件路径，例如 ./id.xlsx')
+=======
+  parser = argparse.ArgumentParser(description='导入电影类型到 MySQL movies 表')
+  parser.add_argument('--csv', required=True, help='CSV 文件路径')
+>>>>>>> main
   parser.add_argument('--host', default='localhost')
   parser.add_argument('--port', type=int, default=3306)
   parser.add_argument('--user', default='root')
@@ -151,7 +221,11 @@ def main():
 
   try:
     ensure_genres_column(conn, args.database)
+<<<<<<< codex/enhance-recommendation-algorithm-with-item-based-filtering-n7s1e8
     updated_count = import_genres_from_xlsx(conn, args.xlsx)
+=======
+    updated_count = import_genres(conn, args.csv)
+>>>>>>> main
     print(f'导入完成，更新行数: {updated_count}')
   finally:
     conn.close()
