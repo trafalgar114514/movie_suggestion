@@ -134,13 +134,13 @@ export default {
       this.updatePupils(event.clientX, event.clientY)
       // #endif
     },
-    submitLogin() {
+    async submitLogin() {
       if (!this.loginForm.username || !this.loginForm.password) {
         uni.showToast({ title: '请完整填写登录信息', icon: 'none' })
         return
       }
 
-      const result = loginUser(this.loginForm)
+      const result = await loginUser(this.loginForm)
       uni.showToast({ title: result.message, icon: result.ok ? 'success' : 'none' })
 
       if (result.ok) {
@@ -149,7 +149,7 @@ export default {
         }, 400)
       }
     },
-    submitRegister() {
+    async submitRegister() {
       if (!this.registerForm.username || !this.registerForm.password) {
         uni.showToast({ title: '请填写用户名和密码', icon: 'none' })
         return
@@ -165,7 +165,7 @@ export default {
         return
       }
 
-      const result = registerUser(this.registerForm)
+      const result = await registerUser(this.registerForm)
       uni.showToast({ title: result.message, icon: result.ok ? 'success' : 'none' })
       if (result.ok) {
         this.mode = 'login'

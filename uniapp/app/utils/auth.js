@@ -1,49 +1,48 @@
-const USERS_KEY = 'movie_users'
 const CURRENT_USER_KEY = 'movie_current_user'
 
-function getUsers() {
-  return uni.getStorageSync(USERS_KEY) || []
+function requestAuth(url, data) {
+  return new Promise((resolve) => {
+    uni.request({
+      url,
+      method: 'POST',
+      data,
+      success: (res) => {
+        resolve(res.data || { code: 500, message: '服务异常' })
+      },
+      fail: () => {
+        resolve({ code: 500, message: '无法连接服务器' })
+      }
+    })
+  })
 }
 
-function setUsers(users) {
-  uni.setStorageSync(USERS_KEY, users)
-}
-
-export function registerUser(payload) {
-  const users = getUsers()
-  const exists = users.find((item) => item.username === payload.username)
-
-  if (exists) {
-    return { ok: false, message: '用户名已存在' }
-  }
-
-  users.push({
+export async function registerUser(payload) {
+  const result = await requestAuth('http://localhost:3000/api/auth/register', {
     username: payload.username,
     password: payload.password,
-    nickname: payload.nickname || payload.username,
-    createdAt: Date.now()
+    nickname: payload.nickname
   })
 
-  setUsers(users)
-  return { ok: true, message: '注册成功，请登录' }
+  return { ok: result.code === 200, message: result.message || '注册失败' }
 }
 
-export function loginUser(payload) {
-  const users = getUsers()
-  const user = users.find(
-    (item) => item.username === payload.username && item.password === payload.password
-  )
+export async function loginUser(payload) {
+  const result = await requestAuth('http://localhost:3000/api/auth/login', {
+    username: payload.username,
+    password: payload.password
+  })
 
-  if (!user) {
-    return { ok: false, message: '用户名或密码错误' }
+  if (result.code !== 200) {
+    return { ok: false, message: result.message || '用户名或密码错误' }
   }
 
+  const user = result.data || { username: payload.username, nickname: payload.username }
   uni.setStorageSync(CURRENT_USER_KEY, {
     username: user.username,
     nickname: user.nickname
   })
 
-  return { ok: true, message: '登录成功' }
+  return { ok: true, message: result.message || '登录成功' }
 }
 
 export function getCurrentUser() {
