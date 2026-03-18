@@ -128,12 +128,6 @@ export default {
         uni.showToast({ title: '两次输入的密码不一致', icon: 'none' })
         return
       }
-
-      if (!this.registerForm.preferences.favoriteGenres.length) {
-        uni.showToast({ title: '请至少选择一个喜欢的类型', icon: 'none' })
-        return
-      }
-
       const result = await registerUser(this.registerForm)
       uni.showToast({ title: result.message, icon: result.ok ? 'success' : 'none' })
       if (result.ok) {
