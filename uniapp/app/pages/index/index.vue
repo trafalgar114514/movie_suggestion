@@ -18,16 +18,24 @@
           <view class="section-title">为你推荐</view>
           <view class="section-subtitle">{{ recommendMetaLabel }}</view>
         </view>
-        <view class="section-link" @click="refreshRecommendations">刷新</view>
+        <view class="section-link" :class="{ disabled: recommendLoading }" @click="refreshRecommendations">
+          {{ recommendLoading ? '刷新中...' : '刷新' }}
+        </view>
+      </view>
+
+      <view v-if="selectedRecommendationName" class="resume-tip">
+        刚刚浏览：{{ selectedRecommendationName }}。返回首页后已保留原推荐列表，避免你找不到它。
       </view>
 
       <view v-if="recommendations.length" class="recommend-list">
-        <scroll-view scroll-x class="recommend-scroll" show-scrollbar="false">
+        <scroll-view scroll-x class="recommend-scroll" :scroll-into-view="activeRecommendAnchor" show-scrollbar="false">
           <view class="recommend-track">
             <view
               v-for="item in recommendations"
+              :id="recommendAnchorId(item.id)"
               :key="item.id"
               class="recommend-card"
+              :class="{ active: selectedRecommendationId === item.id }"
               @click="goDetail(item.id)"
             >
               <image class="recommend-poster" :src="imgUrl + item.poster_path" mode="aspectFill" />
@@ -37,6 +45,11 @@
             </view>
           </view>
         </scroll-view>
+      </view>
+
+      <view v-else-if="recommendLoading" class="empty-state">
+        <view class="empty-title">正在加载推荐结果...</view>
+        <view class="empty-subtitle">请稍候，系统正在整理更适合你的电影。</view>
       </view>
 
       <view v-else class="empty-state">
@@ -76,6 +89,10 @@
 import { apiRequest } from '@/utils/api'
 import { getCurrentUser } from '@/utils/auth'
 
+const HOME_RECOMMENDATION_CACHE_KEY = 'movie_home_recommendation_cache'
+const HOME_RECOMMENDATION_CACHE_TTL = 5 * 60 * 1000
+const HOME_LAST_SELECTED_MOVIE_KEY = 'movie_home_last_selected_movie'
+
 export default {
   data() {
     return {
@@ -83,12 +100,24 @@ export default {
       recommendations: [],
       recommendMode: 'guest',
       movies: [],
-      imgUrl: 'https://image.tmdb.org/t/p/w500'
+      imgUrl: 'https://image.tmdb.org/t/p/w500',
+      recommendLoading: false,
+      selectedRecommendationId: null,
+      selectedRecommendationName: ''
     }
   },
   onShow() {
-    this.currentUser = getCurrentUser()
+    const nextUser = getCurrentUser()
+    const userChanged = !this.isSameUser(this.currentUser, nextUser)
+    this.currentUser = nextUser
+    this.restoreSelectedRecommendation()
     this.getMovies()
+
+    if (userChanged) {
+      this.getRecommendations({ force: true })
+      return
+    }
+
     this.getRecommendations()
   },
   computed: {
@@ -100,32 +129,98 @@ export default {
         return '根据注册时选择的偏好冷启动推荐'
       }
       return '未登录时展示热门与高分兼顾的内容'
+    },
+    activeRecommendAnchor() {
+      return this.selectedRecommendationId ? this.recommendAnchorId(this.selectedRecommendationId) : ''
     }
   },
   methods: {
+    isSameUser(leftUser, rightUser) {
+      return ((leftUser || {}).username || '') === ((rightUser || {}).username || '')
+    },
+    getCacheKey() {
+      const username = (this.currentUser && this.currentUser.username) || 'guest'
+      return `${HOME_RECOMMENDATION_CACHE_KEY}_${username}`
+    },
+    readRecommendationCache() {
+      return uni.getStorageSync(this.getCacheKey()) || null
+    },
+    writeRecommendationCache(payload) {
+      uni.setStorageSync(this.getCacheKey(), {
+        ...payload,
+        savedAt: Date.now()
+      })
+    },
+    restoreSelectedRecommendation() {
+      const lastSelection = uni.getStorageSync(HOME_LAST_SELECTED_MOVIE_KEY) || null
+      if (!lastSelection) {
+        this.selectedRecommendationId = null
+        this.selectedRecommendationName = ''
+        return
+      }
+      this.selectedRecommendationId = Number(lastSelection.id) || null
+      this.selectedRecommendationName = lastSelection.name || ''
+    },
     async getMovies() {
-      const res = await apiRequest('/api/movies')
+      const res = await apiRequest('/api/movies', { showErrorToast: true })
       if (res.code === 200) {
         this.movies = res.data || []
       }
     },
-    async getRecommendations() {
+    async getRecommendations(options = {}) {
+      const { force = false } = options
+      const cached = this.readRecommendationCache()
+      const hasValidCache = cached && Date.now() - Number(cached.savedAt || 0) < HOME_RECOMMENDATION_CACHE_TTL
+
+      if (!force && hasValidCache && Array.isArray(cached.items) && cached.items.length) {
+        this.recommendations = cached.items
+        this.recommendMode = cached.mode || 'guest'
+        return
+      }
+
+      if (this.recommendLoading) {
+        return
+      }
+
+      this.recommendLoading = true
       const query = this.currentUser ? `?username=${this.currentUser.username}&limit=8` : '?limit=8'
-      const res = await apiRequest(`/api/recommend${query}`)
+      const res = await apiRequest(`/api/recommend${query}`, { showErrorToast: true })
+      this.recommendLoading = false
+
       if (res.code === 200) {
         this.recommendations = res.data || []
         this.recommendMode = (res.meta && res.meta.mode) || 'guest'
-      } else {
+        this.writeRecommendationCache({
+          items: this.recommendations,
+          mode: this.recommendMode
+        })
+        return
+      }
+
+      if (!hasValidCache) {
         this.recommendations = []
       }
     },
     refreshRecommendations() {
-      this.getRecommendations()
+      if (this.recommendLoading) {
+        return
+      }
+      this.getRecommendations({ force: true })
+    },
+    recommendAnchorId(id) {
+      return `recommend-${id}`
     },
     goSearch() {
       uni.navigateTo({ url: '/pages/search/search' })
     },
     goDetail(id) {
+      const currentMovie = this.recommendations.find((item) => item.id === id)
+      if (currentMovie) {
+        uni.setStorageSync(HOME_LAST_SELECTED_MOVIE_KEY, {
+          id,
+          name: currentMovie.chinese_name
+        })
+      }
       uni.navigateTo({ url: `/pages/detail/detail?id=${id}` })
     },
     formatDate(value) {
@@ -225,6 +320,20 @@ export default {
   font-size: 24rpx;
 }
 
+.section-link.disabled {
+  opacity: 0.45;
+}
+
+.resume-tip {
+  margin-top: 20rpx;
+  padding: 20rpx 22rpx;
+  border-radius: 18rpx;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 24rpx;
+  line-height: 1.5;
+}
+
 .recommend-list {
   margin-top: 22rpx;
 }
@@ -240,6 +349,14 @@ export default {
 .recommend-card {
   width: 220rpx;
   margin-right: 20rpx;
+  border-radius: 22rpx;
+  padding: 8rpx;
+  transition: all 0.2s ease;
+}
+
+.recommend-card.active {
+  background: rgba(31, 111, 255, 0.08);
+  box-shadow: inset 0 0 0 2rpx rgba(31, 111, 255, 0.16);
 }
 
 .recommend-poster {

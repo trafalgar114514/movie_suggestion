@@ -1,7 +1,7 @@
 <template>
   <view class="container">
     <view class="hero-card">
-      <view class="hero-title">最后一步：完善你的观影偏好</view>
+      <view class="hero-title">{{ isEditingExistingPreferences ? '编辑你的观影偏好' : '最后一步：完善你的观影偏好' }}</view>
       <view class="hero-subtitle">设置完成后，系统会根据你的选择生成更贴合的推荐结果。</view>
     </view>
 
@@ -53,18 +53,28 @@
       </view>
     </view>
 
-    <button class="submit" @click="submitPreferences">保存偏好并返回登录</button>
-    <button class="skip-btn" @click="goBackToLogin">稍后再说</button>
+    <button class="submit" :disabled="saving" @click="submitPreferences">
+      {{ saving ? '保存中...' : isEditingExistingPreferences ? '保存偏好并返回我的主页' : '保存偏好并返回登录' }}
+    </button>
+    <button class="skip-btn" :disabled="saving" @click="goBack">{{ isEditingExistingPreferences ? '取消修改' : '稍后再说' }}</button>
   </view>
 </template>
 
 <script>
-import { clearLastRegisteredUser, saveLastRegisteredUser, saveUserPreferences } from '@/utils/auth'
+import { clearLastRegisteredUser, getCurrentUser, saveLastRegisteredUser, saveUserPreferences } from '@/utils/auth'
+
+const DEFAULT_PREFERENCES = {
+  favoriteGenres: ['剧情'],
+  preferredEra: 'all',
+  discoveryStyle: 'balanced'
+}
 
 export default {
   data() {
     return {
       username: '',
+      source: 'register',
+      saving: false,
       genreOptions: ['动作', '喜剧', '爱情', '科幻', '悬疑', '动画', '犯罪', '冒险', '剧情', '惊悚'],
       eraOptions: [
         { value: 'classic', label: '经典老片', desc: '更喜欢 1999 年及以前的电影气质' },
@@ -77,17 +87,29 @@ export default {
         { value: 'balanced', label: '口碑热度均衡', desc: '兼顾大众热度与评分质量' },
         { value: 'trending', label: '热门趋势优先', desc: '更偏向最近热度更高的电影' }
       ],
-      preferences: {
-        favoriteGenres: ['剧情'],
-        preferredEra: 'all',
-        discoveryStyle: 'balanced'
-      }
+      preferences: { ...DEFAULT_PREFERENCES }
+    }
+  },
+  computed: {
+    isEditingExistingPreferences() {
+      return this.source === 'mine'
     }
   },
   onLoad(options) {
-    this.username = (options && options.username) || ''
+    const currentUser = getCurrentUser()
+    this.username = (options && options.username) || (currentUser && currentUser.username) || ''
+    this.source = (options && options.source) || 'register'
+
     if (this.username) {
       saveLastRegisteredUser(this.username)
+    }
+
+    if (currentUser && currentUser.username === this.username && currentUser.preferences) {
+      this.preferences = {
+        favoriteGenres: [...(currentUser.preferences.favoriteGenres || DEFAULT_PREFERENCES.favoriteGenres)],
+        preferredEra: currentUser.preferences.preferredEra || DEFAULT_PREFERENCES.preferredEra,
+        discoveryStyle: currentUser.preferences.discoveryStyle || DEFAULT_PREFERENCES.discoveryStyle
+      }
     }
   },
   methods: {
@@ -114,12 +136,25 @@ export default {
         return
       }
 
+      if (this.saving) {
+        return
+      }
+
+      this.saving = true
       const result = await saveUserPreferences({
         username: this.username,
         preferences: this.preferences
       })
+      this.saving = false
       uni.showToast({ title: result.message, icon: result.ok ? 'success' : 'none' })
       if (result.ok) {
+        if (this.isEditingExistingPreferences) {
+          setTimeout(() => {
+            uni.switchTab({ url: '/pages/mine/mine' })
+          }, 350)
+          return
+        }
+
         clearLastRegisteredUser()
         saveLastRegisteredUser(this.username)
         setTimeout(() => {
@@ -127,9 +162,13 @@ export default {
         }, 350)
       }
     },
-    goBackToLogin() {
+    goBack() {
       if (this.username) {
         saveLastRegisteredUser(this.username)
+      }
+      if (this.isEditingExistingPreferences) {
+        uni.switchTab({ url: '/pages/mine/mine' })
+        return
       }
       uni.redirectTo({ url: '/pages/auth/auth?mode=login' })
     }
@@ -252,5 +291,10 @@ export default {
 .skip-btn {
   background: #fff;
   color: #4b5563;
+}
+
+.submit[disabled],
+.skip-btn[disabled] {
+  opacity: 0.6;
 }
 </style>

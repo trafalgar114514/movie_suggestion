@@ -30,6 +30,20 @@ export async function saveUserPreferences(payload) {
     }
   })
 
+  if (result.code === 200) {
+    const currentUser = getCurrentUser()
+    if (currentUser && currentUser.username === payload.username) {
+      saveCurrentUser({
+        ...currentUser,
+        preferences: {
+          favoriteGenres: payload.preferences.favoriteGenres || [],
+          preferredEra: payload.preferences.preferredEra || 'all',
+          discoveryStyle: payload.preferences.discoveryStyle || 'balanced'
+        }
+      })
+    }
+  }
+
   return { ok: result.code === 200, message: result.message || '保存偏好失败' }
 }
 

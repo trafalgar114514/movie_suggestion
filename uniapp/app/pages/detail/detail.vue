@@ -14,13 +14,24 @@
       <view class="action-title">互动操作</view>
       <view class="action-subtitle">记录你的喜好后，推荐结果会更贴近你的口味。</view>
       <view class="action-row">
-        <button class="action-btn" :class="behaviorState.liked ? 'like active' : 'like'" @click="toggleBehavior('like', 2.5)">
-          {{ behaviorState.liked ? '取消点赞' : '点赞' }}
+        <button
+          class="action-btn"
+          :class="behaviorState.liked ? 'like active' : 'like'"
+          :disabled="behaviorLoading.like"
+          @click="toggleBehavior('like', 2.5)"
+        >
+          {{ behaviorLoading.like ? '处理中...' : behaviorState.liked ? '取消点赞' : '点赞' }}
         </button>
-        <button class="action-btn" :class="behaviorState.favorited ? 'favorite active' : 'favorite'" @click="toggleBehavior('favorite', 4)">
-          {{ behaviorState.favorited ? '取消收藏' : '收藏' }}
+        <button
+          class="action-btn"
+          :class="behaviorState.favorited ? 'favorite active' : 'favorite'"
+          :disabled="behaviorLoading.favorite"
+          @click="toggleBehavior('favorite', 4)"
+        >
+          {{ behaviorLoading.favorite ? '处理中...' : behaviorState.favorited ? '取消收藏' : '收藏' }}
         </button>
       </view>
+      <view v-if="actionMessage" class="action-message">{{ actionMessage }}</view>
     </view>
 
     <view v-else class="login-tip">登录后可记录浏览、点赞与收藏，用于提升推荐效果。</view>
@@ -43,7 +54,12 @@ export default {
       behaviorState: {
         liked: false,
         favorited: false
-      }
+      },
+      behaviorLoading: {
+        like: false,
+        favorite: false
+      },
+      actionMessage: ''
     }
   },
   onLoad(options) {
@@ -52,12 +68,22 @@ export default {
   },
   methods: {
     async getDetail(id) {
-      const res = await apiRequest('/api/movie', { data: { id } })
+      const res = await apiRequest('/api/movie', { data: { id }, showErrorToast: true })
       if (res.code === 200) {
         this.movie = res.data || {}
+        this.syncHomeSelection()
         this.recordView()
         this.fetchBehaviorState()
       }
+    },
+    syncHomeSelection() {
+      if (!this.movie.id) {
+        return
+      }
+      uni.setStorageSync('movie_home_last_selected_movie', {
+        id: this.movie.id,
+        name: this.movie.chinese_name || ''
+      })
     },
     async fetchBehaviorState() {
       if (!this.currentUser || !this.movie.id) {
@@ -68,7 +94,8 @@ export default {
         data: {
           username: this.currentUser.username,
           movie_id: this.movie.id
-        }
+        },
+        showErrorToast: true
       })
 
       if (res.code === 200 && res.data) {
@@ -98,6 +125,16 @@ export default {
         return
       }
 
+      if (this.behaviorLoading[type]) {
+        return
+      }
+
+      this.behaviorLoading = {
+        ...this.behaviorLoading,
+        [type]: true
+      }
+      this.actionMessage = ''
+
       const res = await apiRequest('/api/behavior/toggle', {
         method: 'POST',
         data: {
@@ -105,8 +142,14 @@ export default {
           movie_id: this.movie.id,
           behavior_type: type,
           score
-        }
+        },
+        showErrorToast: true
       })
+
+      this.behaviorLoading = {
+        ...this.behaviorLoading,
+        [type]: false
+      }
 
       if (res.code === 200 && res.data) {
         if (type === 'like') {
@@ -114,9 +157,12 @@ export default {
         } else if (type === 'favorite') {
           this.behaviorState.favorited = !!res.data.active
         }
+        this.actionMessage = res.message || '操作成功'
+        uni.showToast({ title: this.actionMessage, icon: 'success' })
+        return
       }
 
-      uni.showToast({ title: res.message || (res.code === 200 ? '操作成功' : '操作失败'), icon: res.code === 200 ? 'success' : 'none' })
+      this.actionMessage = res.message || '操作失败，请稍后再试'
     },
     formatDate(value) {
       return String(value || '').substring(0, 10) || '未知'
@@ -214,6 +260,10 @@ export default {
   margin-right: 0;
 }
 
+.action-btn[disabled] {
+  opacity: 0.6;
+}
+
 .like {
   background: #eef4ff;
   color: #1f6fff;
@@ -234,6 +284,12 @@ export default {
   background: #ff6b3d;
   color: #fff;
   border-color: #ff6b3d;
+}
+
+.action-message {
+  margin-top: 18rpx;
+  font-size: 24rpx;
+  color: #4b5563;
 }
 
 .login-tip {

@@ -13,7 +13,10 @@
       </view>
 
       <view class="pref-block" v-if="user.preferences">
-        <view class="pref-title">注册时偏好</view>
+        <view class="pref-header">
+          <view class="pref-title">当前偏好</view>
+          <view class="pref-edit" @click="goPreferences">编辑偏好</view>
+        </view>
         <view class="pref-line">喜欢类型：{{ favoriteGenresText }}</view>
         <view class="pref-line">年代偏好：{{ eraText(user.preferences.preferredEra) }}</view>
         <view class="pref-line">推荐风格：{{ styleText(user.preferences.discoveryStyle) }}</view>
@@ -70,6 +73,7 @@
 
     <view class="menu-card">
       <view class="menu-item" @click="goHome">查看个性推荐</view>
+      <view v-if="user" class="menu-item" @click="goPreferences">修改推荐偏好</view>
       <view class="menu-item" @click="goAuth">切换账号</view>
       <view v-if="user && user.role === 'admin'" class="menu-item highlight" @click="goAdmin">
         管理员中心（用户管理 / 封号 / 推荐权重）
@@ -112,7 +116,8 @@ export default {
       const res = await apiRequest('/api/user/collections', {
         data: {
           username: this.user.username
-        }
+        },
+        showErrorToast: true
       })
 
       if (res.code === 200 && res.data) {
@@ -125,6 +130,13 @@ export default {
     },
     goHome() {
       uni.switchTab({ url: '/pages/index/index' })
+    },
+    goPreferences() {
+      if (!this.user) {
+        uni.showToast({ title: '请先登录', icon: 'none' })
+        return
+      }
+      uni.navigateTo({ url: `/pages/preferences/preferences?username=${this.user.username}&source=mine` })
     },
     goAdmin() {
       uni.navigateTo({ url: '/pages/admin/admin' })
@@ -181,7 +193,8 @@ export default {
 }
 
 .user-top,
-.section-head {
+.section-head,
+.pref-header {
   display: flex;
   justify-content: space-between;
 }
@@ -234,6 +247,11 @@ export default {
   font-size: 27rpx;
   font-weight: 600;
   color: #111827;
+}
+
+.pref-edit {
+  color: #1f6fff;
+  font-size: 24rpx;
 }
 
 .pref-line {
