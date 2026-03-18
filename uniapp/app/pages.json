@@ -25,10 +25,22 @@
       }
     },
     {
+      "path": "pages/preferences/preferences",
+      "style": {
+        "navigationBarTitleText": "偏好设置"
+      }
+    },
+    {
       "path": "pages/auth/auth",
       "style": {
         "navigationBarTitleText": "登录 / 注册",
         "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/admin/admin",
+      "style": {
+        "navigationBarTitleText": "管理员中心"
       }
     }
   ],

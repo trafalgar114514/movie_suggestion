@@ -1,52 +1,76 @@
-const CURRENT_USER_KEY = 'movie_current_user'
+import { apiRequest } from '@/utils/api'
 
-function requestAuth(url, data) {
-  return new Promise((resolve) => {
-    uni.request({
-      url,
-      method: 'POST',
-      data,
-      success: (res) => {
-        resolve(res.data || { code: 500, message: '服务异常' })
-      },
-      fail: () => {
-        resolve({ code: 500, message: '无法连接服务器' })
-      }
-    })
-  })
-}
+const CURRENT_USER_KEY = 'movie_current_user'
+const LAST_REGISTERED_USER_KEY = 'movie_last_registered_user'
 
 export async function registerUser(payload) {
-  const result = await requestAuth('http://localhost:3000/api/auth/register', {
-    username: payload.username,
-    password: payload.password,
-    nickname: payload.nickname
+  const result = await apiRequest('/api/auth/register', {
+    method: 'POST',
+    data: {
+      username: payload.username,
+      password: payload.password,
+      nickname: payload.nickname
+    }
   })
 
   return { ok: result.code === 200, message: result.message || '注册失败' }
 }
 
+export async function saveUserPreferences(payload) {
+  const result = await apiRequest('/api/auth/preferences', {
+    method: 'POST',
+    data: {
+      username: payload.username,
+      preferences: payload.preferences
+    }
+  })
+
+  return { ok: result.code === 200, message: result.message || '保存偏好失败' }
+}
+
 export async function loginUser(payload) {
-  const result = await requestAuth('http://localhost:3000/api/auth/login', {
-    username: payload.username,
-    password: payload.password
+  const result = await apiRequest('/api/auth/login', {
+    method: 'POST',
+    data: {
+      username: payload.username,
+      password: payload.password
+    }
   })
 
   if (result.code !== 200) {
     return { ok: false, message: result.message || '用户名或密码错误' }
   }
 
-  const user = result.data || { username: payload.username, nickname: payload.username }
+  const user = result.data || { username: payload.username, nickname: payload.username, role: 'user', status: 'active' }
   uni.setStorageSync(CURRENT_USER_KEY, {
     username: user.username,
-    nickname: user.nickname
+    nickname: user.nickname,
+    role: user.role || 'user',
+    status: user.status || 'active',
+    preferences: user.preferences || null
   })
 
-  return { ok: true, message: result.message || '登录成功' }
+  return { ok: true, message: result.message || '登录成功', user }
 }
 
 export function getCurrentUser() {
   return uni.getStorageSync(CURRENT_USER_KEY) || null
+}
+
+export function saveCurrentUser(user) {
+  uni.setStorageSync(CURRENT_USER_KEY, user)
+}
+
+export function saveLastRegisteredUser(username) {
+  uni.setStorageSync(LAST_REGISTERED_USER_KEY, username)
+}
+
+export function getLastRegisteredUser() {
+  return uni.getStorageSync(LAST_REGISTERED_USER_KEY) || ''
+}
+
+export function clearLastRegisteredUser() {
+  uni.removeStorageSync(LAST_REGISTERED_USER_KEY)
 }
 
 export function logoutUser() {
