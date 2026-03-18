@@ -18,7 +18,7 @@ export async function registerUser(payload) {
     }
   })
 
-  return { ok: result.code === 200, message: result.message || '注册失败' }
+  return { ok: result.code === 200, message: result.message || '保存偏好失败' }
 }
 
 export async function saveUserPreferences(payload) {
