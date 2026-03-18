@@ -1,20 +1,12 @@
 <template>
-  <view
-    class="auth-page"
-    @touchstart="handleTouch"
-    @touchmove="handleTouch"
-    @touchend="handleRelease"
-    @touchcancel="handleRelease"
-    @mousemove="handleMouse"
-    @mouseleave="handleRelease"
-  >
+  <view class="auth-page">
     <view class="hero">
       <view class="hero-title">欢迎回来，准备挑部电影吧</view>
-      <view class="hero-subtitle">四位小伙伴会悄悄看向你的手指 👀</view>
+      <view class="hero-subtitle">登录后可获得个性推荐，注册成功后再填写偏好问卷。</view>
 
-      <view class="buddy-stage">
+      <view class="buddy-stage" aria-hidden="true">
         <view
-          v-for="(buddy, index) in buddies"
+          v-for="buddy in buddies"
           :key="buddy.id"
           class="buddy"
           :class="buddy.className"
@@ -22,7 +14,7 @@
         >
           <view class="eyes-row">
             <view v-for="eyeIndex in 2" :key="eyeIndex" class="eye">
-              <view class="pupil" :style="pupilStyles[index * 2 + eyeIndex - 1]"></view>
+              <view class="pupil"></view>
             </view>
           </view>
           <view v-if="buddy.mouth === 'line'" class="mouth-line"></view>
@@ -39,16 +31,17 @@
       </view>
 
       <view v-if="mode === 'login'" class="form-body">
-        <input v-model="loginForm.username" class="input" placeholder="用户名" />
-        <input v-model="loginForm.password" class="input" password placeholder="密码" />
+        <input v-model="loginForm.username" class="input" type="text" placeholder="用户名" :cursor-spacing="24" />
+        <input v-model="loginForm.password" class="input" type="text" password placeholder="密码" :cursor-spacing="24" />
         <button class="submit" @click="submitLogin">立即登录</button>
       </view>
 
       <view v-else class="form-body">
-        <input v-model="registerForm.nickname" class="input" placeholder="昵称（选填）" />
-        <input v-model="registerForm.username" class="input" placeholder="用户名" />
-        <input v-model="registerForm.password" class="input" password placeholder="密码（至少6位）" />
-        <input v-model="registerForm.confirmPassword" class="input" password placeholder="确认密码" />
+        <input v-model="registerForm.nickname" class="input" type="text" placeholder="昵称（选填）" :cursor-spacing="24" />
+        <input v-model="registerForm.username" class="input" type="text" placeholder="用户名" :cursor-spacing="24" />
+        <input v-model="registerForm.password" class="input" type="text" password placeholder="密码（至少6位）" :cursor-spacing="24" />
+        <input v-model="registerForm.confirmPassword" class="input" type="text" password placeholder="确认密码" :cursor-spacing="24" />
+        <view class="register-tip">注册完成后会进入偏好设置页，帮助系统生成更准确的推荐。</view>
         <button class="submit" @click="submitRegister">创建账号</button>
       </view>
     </view>
@@ -56,9 +49,7 @@
 </template>
 
 <script>
-import { loginUser, registerUser } from '@/utils/auth'
-
-const CENTER_TRANSFORM = 'translate(0px, 0px)'
+import { getLastRegisteredUser, loginUser, registerUser, saveLastRegisteredUser } from '@/utils/auth'
 
 export default {
   data() {
@@ -79,61 +70,22 @@ export default {
         username: '',
         password: '',
         confirmPassword: ''
-      },
-      eyeCenters: [],
-      pupilStyles: Array.from({ length: 8 }, () => ({ transform: CENTER_TRANSFORM }))
+      }
     }
   },
-  mounted() {
-    this.$nextTick(() => {
-      this.captureEyeCenters()
-    })
+  onLoad(options) {
+    if (options && options.mode === 'login') {
+      this.mode = 'login'
+    }
+  },
+  onShow() {
+    const lastRegisteredUser = getLastRegisteredUser()
+    if (lastRegisteredUser) {
+      this.mode = 'login'
+      this.loginForm.username = lastRegisteredUser
+    }
   },
   methods: {
-    captureEyeCenters() {
-      const query = uni.createSelectorQuery().in(this)
-      query.selectAll('.eye').boundingClientRect()
-      query.exec((res) => {
-        const list = res[0] || []
-        this.eyeCenters = list.map((item) => ({
-          x: item.left + item.width / 2,
-          y: item.top + item.height / 2
-        }))
-      })
-    },
-    resetPupils() {
-      this.pupilStyles = this.pupilStyles.map(() => ({ transform: CENTER_TRANSFORM }))
-    },
-    updatePupils(clientX, clientY) {
-      if (!this.eyeCenters.length) {
-        return
-      }
-
-      const max = 7
-      this.pupilStyles = this.eyeCenters.map((eye) => {
-        const dx = clientX - eye.x
-        const dy = clientY - eye.y
-        const distance = Math.sqrt(dx * dx + dy * dy) || 1
-        const ratio = Math.min(max, distance) / distance
-        return {
-          transform: `translate(${(dx * ratio).toFixed(2)}px, ${(dy * ratio).toFixed(2)}px)`
-        }
-      })
-    },
-    handleTouch(event) {
-      const touch = event.touches && event.touches[0]
-      if (touch) {
-        this.updatePupils(touch.clientX, touch.clientY)
-      }
-    },
-    handleRelease() {
-      this.resetPupils()
-    },
-    handleMouse(event) {
-      // #ifdef H5
-      this.updatePupils(event.clientX, event.clientY)
-      // #endif
-    },
     async submitLogin() {
       if (!this.loginForm.username || !this.loginForm.password) {
         uni.showToast({ title: '请完整填写登录信息', icon: 'none' })
@@ -168,9 +120,12 @@ export default {
       const result = await registerUser(this.registerForm)
       uni.showToast({ title: result.message, icon: result.ok ? 'success' : 'none' })
       if (result.ok) {
-        this.mode = 'login'
-        this.loginForm.username = this.registerForm.username
-        this.loginForm.password = ''
+        saveLastRegisteredUser(this.registerForm.username)
+        setTimeout(() => {
+          uni.navigateTo({
+            url: `/pages/preferences/preferences?username=${this.registerForm.username}`
+          })
+        }, 350)
       }
     }
   }
@@ -184,6 +139,8 @@ export default {
 }
 
 .hero {
+  position: relative;
+  z-index: 1;
   padding: 42rpx 30rpx 20rpx;
 }
 
@@ -197,9 +154,11 @@ export default {
   margin-top: 10rpx;
   color: rgba(255, 255, 255, 0.86);
   font-size: 25rpx;
+  line-height: 1.5;
 }
 
 .buddy-stage {
+  pointer-events: none;
   height: 430rpx;
   margin-top: 30rpx;
   border-radius: 34rpx;
@@ -258,78 +217,85 @@ export default {
 .eye {
   width: 30rpx;
   height: 30rpx;
+  margin: 0 16rpx;
   border-radius: 50%;
   background: #fff;
-  margin: 0 10rpx;
-  justify-content: center;
-  align-items: center;
-  display: flex;
+  position: relative;
+  overflow: hidden;
 }
 
 .pupil {
-  width: 12rpx;
-  height: 12rpx;
+  width: 14rpx;
+  height: 14rpx;
   border-radius: 50%;
-  background: #252525;
-  transition: transform 140ms ease-out;
+  background: #20212a;
+  position: absolute;
+  left: 8rpx;
+  top: 8rpx;
+}
+
+.mouth-line,
+.mouth-dot,
+.mouth-smile {
+  margin-top: 28rpx;
 }
 
 .mouth-line {
-  margin-top: 34rpx;
-  width: 84rpx;
+  width: 48rpx;
   height: 8rpx;
   border-radius: 999rpx;
-  background: rgba(31, 35, 45, 0.85);
-}
-
-.mouth-smile {
-  margin-top: 28rpx;
-  width: 90rpx;
-  height: 44rpx;
-  border: 7rpx solid rgba(34, 38, 48, 0.75);
-  border-top: 0;
-  border-left: 0;
-  border-right: 0;
-  border-radius: 0 0 90rpx 90rpx;
+  background: rgba(35, 36, 49, 0.85);
 }
 
 .mouth-dot {
-  margin-top: 28rpx;
-  width: 18rpx;
-  height: 18rpx;
+  width: 16rpx;
+  height: 16rpx;
   border-radius: 50%;
-  background: rgba(30, 33, 43, 0.85);
+  background: rgba(35, 36, 49, 0.85);
+}
+
+.mouth-smile {
+  width: 54rpx;
+  height: 28rpx;
+  border: 6rpx solid rgba(35, 36, 49, 0.85);
+  border-top: 0;
+  border-left-color: transparent;
+  border-right-color: transparent;
+  border-bottom-left-radius: 40rpx;
+  border-bottom-right-radius: 40rpx;
 }
 
 .panel {
-  margin-top: 20rpx;
+  position: relative;
+  z-index: 20;
+  margin: -30rpx 24rpx 30rpx;
+  padding: 28rpx;
+  border-radius: 30rpx;
   background: #fff;
-  border-radius: 36rpx 36rpx 0 0;
-  padding: 40rpx 28rpx 80rpx;
-  min-height: 52vh;
+  box-shadow: 0 16rpx 46rpx rgba(55, 68, 100, 0.12);
 }
 
 .tabs {
   display: flex;
-  background: #f2f4f8;
-  border-radius: 999rpx;
+  background: #f1f3fb;
+  border-radius: 20rpx;
   padding: 8rpx;
 }
 
 .tab {
   flex: 1;
   text-align: center;
-  padding: 16rpx 0;
-  color: #6a6f84;
-  border-radius: 999rpx;
+  padding: 18rpx 0;
+  border-radius: 16rpx;
+  color: #667085;
   font-size: 28rpx;
 }
 
 .tab.active {
   background: #fff;
-  color: #1e2545;
+  color: #1f2937;
   font-weight: 600;
-  box-shadow: 0 6rpx 12rpx rgba(23, 26, 54, 0.08);
+  box-shadow: 0 8rpx 20rpx rgba(29, 41, 57, 0.08);
 }
 
 .form-body {
@@ -337,20 +303,33 @@ export default {
 }
 
 .input {
-  height: 88rpx;
-  background: #f7f8fc;
+  width: 100%;
+  height: 96rpx;
+  box-sizing: border-box;
+  background: #f5f7fb;
   border-radius: 18rpx;
   padding: 0 24rpx;
   margin-bottom: 18rpx;
   font-size: 28rpx;
+  position: relative;
+  z-index: 30;
+}
+
+.register-tip {
+  margin-bottom: 18rpx;
+  padding: 22rpx;
+  border-radius: 18rpx;
+  background: #f8f9ff;
+  color: #667085;
+  font-size: 24rpx;
+  line-height: 1.5;
 }
 
 .submit {
-  margin-top: 14rpx;
-  background: linear-gradient(90deg, #6a54ff, #8f6dff);
+  margin-top: 12rpx;
   border-radius: 18rpx;
+  background: linear-gradient(135deg, #1f6fff, #4f8bff);
   color: #fff;
   font-size: 30rpx;
-  font-weight: 600;
 }
 </style>
