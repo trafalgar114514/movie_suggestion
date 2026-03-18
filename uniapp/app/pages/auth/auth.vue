@@ -1,16 +1,16 @@
 <template>
-  <view
-    class="auth-page"
-    @touchstart="handleTouch"
-    @touchmove="handleTouch"
-    @touchend="handleRelease"
-    @touchcancel="handleRelease"
-    @mousemove="handleMouse"
-    @mouseleave="handleRelease"
-  >
-    <view class="hero">
+  <view class="auth-page">
+    <view
+      class="hero"
+      @touchstart="handleTouch"
+      @touchmove="handleTouch"
+      @touchend="handleRelease"
+      @touchcancel="handleRelease"
+      @mousemove="handleMouse"
+      @mouseleave="handleRelease"
+    >
       <view class="hero-title">欢迎回来，准备挑部电影吧</view>
-      <view class="hero-subtitle">四位小伙伴会悄悄看向你的手指 👀</view>
+      <view class="hero-subtitle">登录后可获得个性推荐，注册成功后再填写偏好问卷。</view>
 
       <view class="buddy-stage">
         <view
@@ -49,6 +49,7 @@
         <input v-model="registerForm.username" class="input" placeholder="用户名" />
         <input v-model="registerForm.password" class="input" password placeholder="密码（至少6位）" />
         <input v-model="registerForm.confirmPassword" class="input" password placeholder="确认密码" />
+        <view class="register-tip">注册完成后会进入偏好设置页，帮助系统生成更准确的推荐。</view>
         <button class="submit" @click="submitRegister">创建账号</button>
       </view>
     </view>
@@ -56,7 +57,7 @@
 </template>
 
 <script>
-import { loginUser, registerUser } from '@/utils/auth'
+import { getLastRegisteredUser, loginUser, registerUser, saveLastRegisteredUser } from '@/utils/auth'
 
 const CENTER_TRANSFORM = 'translate(0px, 0px)'
 
@@ -82,6 +83,18 @@ export default {
       },
       eyeCenters: [],
       pupilStyles: Array.from({ length: 8 }, () => ({ transform: CENTER_TRANSFORM }))
+    }
+  },
+  onLoad(options) {
+    if (options && options.mode === 'login') {
+      this.mode = 'login'
+    }
+  },
+  onShow() {
+    const lastRegisteredUser = getLastRegisteredUser()
+    if (lastRegisteredUser) {
+      this.mode = 'login'
+      this.loginForm.username = lastRegisteredUser
     }
   },
   mounted() {
@@ -168,9 +181,12 @@ export default {
       const result = await registerUser(this.registerForm)
       uni.showToast({ title: result.message, icon: result.ok ? 'success' : 'none' })
       if (result.ok) {
-        this.mode = 'login'
-        this.loginForm.username = this.registerForm.username
-        this.loginForm.password = ''
+        saveLastRegisteredUser(this.registerForm.username)
+        setTimeout(() => {
+          uni.navigateTo({
+            url: `/pages/preferences/preferences?username=${this.registerForm.username}`
+          })
+        }, 350)
       }
     }
   }
@@ -197,6 +213,7 @@ export default {
   margin-top: 10rpx;
   color: rgba(255, 255, 255, 0.86);
   font-size: 25rpx;
+  line-height: 1.5;
 }
 
 .buddy-stage {
@@ -258,78 +275,84 @@ export default {
 .eye {
   width: 30rpx;
   height: 30rpx;
+  margin: 0 16rpx;
   border-radius: 50%;
   background: #fff;
-  margin: 0 10rpx;
-  justify-content: center;
-  align-items: center;
-  display: flex;
+  position: relative;
+  overflow: hidden;
 }
 
 .pupil {
-  width: 12rpx;
-  height: 12rpx;
+  width: 14rpx;
+  height: 14rpx;
   border-radius: 50%;
-  background: #252525;
-  transition: transform 140ms ease-out;
+  background: #20212a;
+  position: absolute;
+  left: 8rpx;
+  top: 8rpx;
+  transition: transform 0.08s linear;
+}
+
+.mouth-line,
+.mouth-dot,
+.mouth-smile {
+  margin-top: 28rpx;
 }
 
 .mouth-line {
-  margin-top: 34rpx;
-  width: 84rpx;
+  width: 48rpx;
   height: 8rpx;
   border-radius: 999rpx;
-  background: rgba(31, 35, 45, 0.85);
-}
-
-.mouth-smile {
-  margin-top: 28rpx;
-  width: 90rpx;
-  height: 44rpx;
-  border: 7rpx solid rgba(34, 38, 48, 0.75);
-  border-top: 0;
-  border-left: 0;
-  border-right: 0;
-  border-radius: 0 0 90rpx 90rpx;
+  background: rgba(35, 36, 49, 0.85);
 }
 
 .mouth-dot {
-  margin-top: 28rpx;
-  width: 18rpx;
-  height: 18rpx;
+  width: 16rpx;
+  height: 16rpx;
   border-radius: 50%;
-  background: rgba(30, 33, 43, 0.85);
+  background: rgba(35, 36, 49, 0.85);
+}
+
+.mouth-smile {
+  width: 54rpx;
+  height: 28rpx;
+  border: 6rpx solid rgba(35, 36, 49, 0.85);
+  border-top: 0;
+  border-left-color: transparent;
+  border-right-color: transparent;
+  border-bottom-left-radius: 40rpx;
+  border-bottom-right-radius: 40rpx;
 }
 
 .panel {
-  margin-top: 20rpx;
+  margin: -30rpx 24rpx 30rpx;
+  padding: 28rpx;
+  border-radius: 30rpx;
   background: #fff;
-  border-radius: 36rpx 36rpx 0 0;
-  padding: 40rpx 28rpx 80rpx;
-  min-height: 52vh;
+  box-shadow: 0 16rpx 46rpx rgba(55, 68, 100, 0.12);
 }
 
 .tabs {
   display: flex;
-  background: #f2f4f8;
-  border-radius: 999rpx;
+  background: #f1f3fb;
+  border-radius: 20rpx;
   padding: 8rpx;
 }
 
 .tab {
   flex: 1;
   text-align: center;
-  padding: 16rpx 0;
-  color: #6a6f84;
-  border-radius: 999rpx;
+  padding: 18rpx 0;
+  border-radius: 16rpx;
+  color: #667085;
   font-size: 28rpx;
 }
 
 .tab.active {
   background: #fff;
-  color: #1e2545;
+  color: #1f2937;
   font-weight: 600;
-  box-shadow: 0 6rpx 12rpx rgba(23, 26, 54, 0.08);
+  box-shadow: 0 8rpx 20rpx rgba(29, 41, 57, 0.08);
 }
 
 .form-body {
@@ -337,20 +360,30 @@ export default {
 }
 
 .input {
-  height: 88rpx;
-  background: #f7f8fc;
+  width: 100%;
+  box-sizing: border-box;
+  background: #f5f7fb;
   border-radius: 18rpx;
-  padding: 0 24rpx;
+  padding: 24rpx;
   margin-bottom: 18rpx;
   font-size: 28rpx;
 }
 
-.submit {
-  margin-top: 14rpx;
-  background: linear-gradient(90deg, #6a54ff, #8f6dff);
+.register-tip {
+  margin-bottom: 18rpx;
+  padding: 22rpx;
   border-radius: 18rpx;
+  background: #f8f9ff;
+  color: #667085;
+  font-size: 24rpx;
+  line-height: 1.5;
+}
+
+.submit {
+  margin-top: 12rpx;
+  border-radius: 18rpx;
+  background: linear-gradient(135deg, #1f6fff, #4f8bff);
   color: #fff;
   font-size: 30rpx;
-  font-weight: 600;
 }
 </style>
