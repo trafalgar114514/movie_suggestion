@@ -160,13 +160,14 @@ function parseGenres(rawGenres) {
   return []
 }
 
-function normalizePreferences(inputPreferences) {
-  const favoriteGenres = Array.isArray(inputPreferences.favoriteGenres)
-    ? [...new Set(inputPreferences.favoriteGenres.map((item) => String(item).trim()).filter((item) => GENRE_OPTIONS.includes(item)))].slice(0, 5)
+function normalizePreferences(inputPreferences = {}) {
+  const source = inputPreferences || {}
+  const favoriteGenres = Array.isArray(source.favoriteGenres)
+    ? [...new Set(source.favoriteGenres.map((item) => String(item).trim()).filter((item) => GENRE_OPTIONS.includes(item)))].slice(0, 5)
     : []
 
-  const preferredEra = ERA_OPTIONS.has(inputPreferences.preferredEra) ? inputPreferences.preferredEra : 'all'
-  const discoveryStyle = STYLE_OPTIONS.has(inputPreferences.discoveryStyle) ? inputPreferences.discoveryStyle : 'balanced'
+  const preferredEra = ERA_OPTIONS.has(source.preferredEra) ? source.preferredEra : 'all'
+  const discoveryStyle = STYLE_OPTIONS.has(source.discoveryStyle) ? source.discoveryStyle : 'balanced'
 
   return {
     favoriteGenres,

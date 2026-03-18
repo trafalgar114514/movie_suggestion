@@ -2,6 +2,11 @@ import { apiRequest } from '@/utils/api'
 
 const CURRENT_USER_KEY = 'movie_current_user'
 const LAST_REGISTERED_USER_KEY = 'movie_last_registered_user'
+const DEFAULT_PREFERENCES = {
+  favoriteGenres: [],
+  preferredEra: 'all',
+  discoveryStyle: 'balanced'
+}
 
 export async function registerUser(payload) {
   const result = await apiRequest('/api/auth/register', {
@@ -13,7 +18,7 @@ export async function registerUser(payload) {
     }
   })
 
-  return { ok: result.code === 200, message: result.message || '注册失败' }
+  return { ok: result.code === 200, message: result.message || '保存偏好失败' }
 }
 
 export async function saveUserPreferences(payload) {
@@ -47,7 +52,7 @@ export async function loginUser(payload) {
     nickname: user.nickname,
     role: user.role || 'user',
     status: user.status || 'active',
-    preferences: user.preferences || null
+    preferences: user.preferences || { ...DEFAULT_PREFERENCES }
   })
 
   return { ok: true, message: result.message || '登录成功', user }

@@ -14,7 +14,7 @@
 
       <view class="pref-block" v-if="user.preferences">
         <view class="pref-title">注册时偏好</view>
-        <view class="pref-line">喜欢类型：{{ user.preferences.favoriteGenres.join(' / ') || '未设置' }}</view>
+        <view class="pref-line">喜欢类型：{{ favoriteGenresText }}</view>
         <view class="pref-line">年代偏好：{{ eraText(user.preferences.preferredEra) }}</view>
         <view class="pref-line">推荐风格：{{ styleText(user.preferences.discoveryStyle) }}</view>
       </view>
@@ -49,6 +49,11 @@ export default {
   },
   onShow() {
     this.user = getCurrentUser()
+  },
+  computed: {
+    favoriteGenresText() {
+      return (((this.user || {}).preferences || {}).favoriteGenres || []).join(' / ') || '未设置'
+    }
   },
   methods: {
     goAuth() {

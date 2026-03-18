@@ -342,16 +342,6 @@ export default {
   line-height: 1.5;
 }
 
-.register-tip {
-  margin-bottom: 18rpx;
-  padding: 22rpx;
-  border-radius: 18rpx;
-  background: #f8f9ff;
-  color: #667085;
-  font-size: 24rpx;
-  line-height: 1.5;
-}
-
 .submit {
   margin-top: 12rpx;
   border-radius: 18rpx;
