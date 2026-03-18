@@ -10,7 +10,7 @@
   >
     <view class="hero">
       <view class="hero-title">欢迎回来，准备挑部电影吧</view>
-      <view class="hero-subtitle">四位小伙伴会悄悄看向你的手指 👀</view>
+      <view class="hero-subtitle">登录后可获得个性推荐，管理员还能管理用户与算法</view>
 
       <view class="buddy-stage">
         <view
@@ -49,6 +49,55 @@
         <input v-model="registerForm.username" class="input" placeholder="用户名" />
         <input v-model="registerForm.password" class="input" password placeholder="密码（至少6位）" />
         <input v-model="registerForm.confirmPassword" class="input" password placeholder="确认密码" />
+
+        <view class="question-card">
+          <view class="question-title">1. 你最喜欢哪些电影类型？</view>
+          <view class="question-tip">至少选择 1 项，最多建议 5 项</view>
+          <view class="chips">
+            <view
+              v-for="genre in genreOptions"
+              :key="genre"
+              class="chip"
+              :class="{ active: registerForm.preferences.favoriteGenres.includes(genre) }"
+              @click="toggleGenre(genre)"
+            >
+              {{ genre }}
+            </view>
+          </view>
+        </view>
+
+        <view class="question-card">
+          <view class="question-title">2. 你更偏爱哪个年代的电影？</view>
+          <view class="radio-list">
+            <view
+              v-for="item in eraOptions"
+              :key="item.value"
+              class="radio-item"
+              :class="{ active: registerForm.preferences.preferredEra === item.value }"
+              @click="registerForm.preferences.preferredEra = item.value"
+            >
+              <view class="radio-title">{{ item.label }}</view>
+              <view class="radio-desc">{{ item.desc }}</view>
+            </view>
+          </view>
+        </view>
+
+        <view class="question-card">
+          <view class="question-title">3. 你更想看到哪类推荐结果？</view>
+          <view class="radio-list">
+            <view
+              v-for="item in styleOptions"
+              :key="item.value"
+              class="radio-item"
+              :class="{ active: registerForm.preferences.discoveryStyle === item.value }"
+              @click="registerForm.preferences.discoveryStyle = item.value"
+            >
+              <view class="radio-title">{{ item.label }}</view>
+              <view class="radio-desc">{{ item.desc }}</view>
+            </view>
+          </view>
+        </view>
+
         <button class="submit" @click="submitRegister">创建账号</button>
       </view>
     </view>
@@ -70,6 +119,18 @@ export default {
         { id: 3, className: 'buddy-front-left', bg: 'linear-gradient(180deg, #ffa26f, #f18d61)', mouth: 'smile' },
         { id: 4, className: 'buddy-front-right', bg: 'linear-gradient(180deg, #e8dc5e, #dfcf4f)', mouth: 'line' }
       ],
+      genreOptions: ['动作', '喜剧', '爱情', '科幻', '悬疑', '动画', '犯罪', '冒险', '剧情', '惊悚'],
+      eraOptions: [
+        { value: 'classic', label: '经典老片', desc: '更喜欢 1999 年及以前的电影气质' },
+        { value: 'millennial', label: '千禧佳作', desc: '偏爱 2000 - 2014 年的成熟商业片' },
+        { value: 'recent', label: '近年热门', desc: '更关注 2015 年之后的新片' },
+        { value: 'all', label: '都可以', desc: '时间不是问题，更关注内容本身' }
+      ],
+      styleOptions: [
+        { value: 'quality', label: '高口碑优先', desc: '尽量把评分高的作品排在前面' },
+        { value: 'balanced', label: '口碑热度均衡', desc: '兼顾大众热度与评分质量' },
+        { value: 'trending', label: '热门趋势优先', desc: '更偏向最近热度更高的电影' }
+      ],
       loginForm: {
         username: '',
         password: ''
@@ -78,7 +139,12 @@ export default {
         nickname: '',
         username: '',
         password: '',
-        confirmPassword: ''
+        confirmPassword: '',
+        preferences: {
+          favoriteGenres: ['剧情'],
+          preferredEra: 'all',
+          discoveryStyle: 'balanced'
+        }
       },
       eyeCenters: [],
       pupilStyles: Array.from({ length: 8 }, () => ({ transform: CENTER_TRANSFORM }))
@@ -134,6 +200,18 @@ export default {
       this.updatePupils(event.clientX, event.clientY)
       // #endif
     },
+    toggleGenre(genre) {
+      const selected = this.registerForm.preferences.favoriteGenres
+      if (selected.includes(genre)) {
+        this.registerForm.preferences.favoriteGenres = selected.filter((item) => item !== genre)
+        return
+      }
+      if (selected.length >= 5) {
+        uni.showToast({ title: '最多选择 5 个类型', icon: 'none' })
+        return
+      }
+      this.registerForm.preferences.favoriteGenres = [...selected, genre]
+    },
     async submitLogin() {
       if (!this.loginForm.username || !this.loginForm.password) {
         uni.showToast({ title: '请完整填写登录信息', icon: 'none' })
@@ -162,6 +240,11 @@ export default {
 
       if (this.registerForm.password !== this.registerForm.confirmPassword) {
         uni.showToast({ title: '两次输入的密码不一致', icon: 'none' })
+        return
+      }
+
+      if (!this.registerForm.preferences.favoriteGenres.length) {
+        uni.showToast({ title: '请至少选择一个喜欢的类型', icon: 'none' })
         return
       }
 
@@ -197,6 +280,7 @@ export default {
   margin-top: 10rpx;
   color: rgba(255, 255, 255, 0.86);
   font-size: 25rpx;
+  line-height: 1.5;
 }
 
 .buddy-stage {
@@ -258,78 +342,84 @@ export default {
 .eye {
   width: 30rpx;
   height: 30rpx;
+  margin: 0 16rpx;
   border-radius: 50%;
   background: #fff;
-  margin: 0 10rpx;
-  justify-content: center;
-  align-items: center;
-  display: flex;
+  position: relative;
+  overflow: hidden;
 }
 
 .pupil {
-  width: 12rpx;
-  height: 12rpx;
+  width: 14rpx;
+  height: 14rpx;
   border-radius: 50%;
-  background: #252525;
-  transition: transform 140ms ease-out;
+  background: #20212a;
+  position: absolute;
+  left: 8rpx;
+  top: 8rpx;
+  transition: transform 0.08s linear;
+}
+
+.mouth-line,
+.mouth-dot,
+.mouth-smile {
+  margin-top: 28rpx;
 }
 
 .mouth-line {
-  margin-top: 34rpx;
-  width: 84rpx;
+  width: 48rpx;
   height: 8rpx;
   border-radius: 999rpx;
-  background: rgba(31, 35, 45, 0.85);
-}
-
-.mouth-smile {
-  margin-top: 28rpx;
-  width: 90rpx;
-  height: 44rpx;
-  border: 7rpx solid rgba(34, 38, 48, 0.75);
-  border-top: 0;
-  border-left: 0;
-  border-right: 0;
-  border-radius: 0 0 90rpx 90rpx;
+  background: rgba(35, 36, 49, 0.85);
 }
 
 .mouth-dot {
-  margin-top: 28rpx;
-  width: 18rpx;
-  height: 18rpx;
+  width: 16rpx;
+  height: 16rpx;
   border-radius: 50%;
-  background: rgba(30, 33, 43, 0.85);
+  background: rgba(35, 36, 49, 0.85);
+}
+
+.mouth-smile {
+  width: 54rpx;
+  height: 28rpx;
+  border: 6rpx solid rgba(35, 36, 49, 0.85);
+  border-top: 0;
+  border-left-color: transparent;
+  border-right-color: transparent;
+  border-bottom-left-radius: 40rpx;
+  border-bottom-right-radius: 40rpx;
 }
 
 .panel {
-  margin-top: 20rpx;
+  margin: -30rpx 24rpx 30rpx;
+  padding: 28rpx;
+  border-radius: 30rpx;
   background: #fff;
-  border-radius: 36rpx 36rpx 0 0;
-  padding: 40rpx 28rpx 80rpx;
-  min-height: 52vh;
+  box-shadow: 0 16rpx 46rpx rgba(55, 68, 100, 0.12);
 }
 
 .tabs {
   display: flex;
-  background: #f2f4f8;
-  border-radius: 999rpx;
+  background: #f1f3fb;
+  border-radius: 20rpx;
   padding: 8rpx;
 }
 
 .tab {
   flex: 1;
   text-align: center;
-  padding: 16rpx 0;
-  color: #6a6f84;
-  border-radius: 999rpx;
+  padding: 18rpx 0;
+  border-radius: 16rpx;
+  color: #667085;
   font-size: 28rpx;
 }
 
 .tab.active {
   background: #fff;
-  color: #1e2545;
+  color: #1f2937;
   font-weight: 600;
-  box-shadow: 0 6rpx 12rpx rgba(23, 26, 54, 0.08);
+  box-shadow: 0 8rpx 20rpx rgba(29, 41, 57, 0.08);
 }
 
 .form-body {
@@ -337,20 +427,91 @@ export default {
 }
 
 .input {
-  height: 88rpx;
-  background: #f7f8fc;
+  width: 100%;
+  box-sizing: border-box;
+  background: #f5f7fb;
   border-radius: 18rpx;
-  padding: 0 24rpx;
+  padding: 24rpx;
   margin-bottom: 18rpx;
   font-size: 28rpx;
 }
 
-.submit {
-  margin-top: 14rpx;
-  background: linear-gradient(90deg, #6a54ff, #8f6dff);
+.question-card {
+  background: #f8f9ff;
+  border-radius: 22rpx;
+  padding: 22rpx;
+  margin-bottom: 18rpx;
+}
+
+.question-title {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.question-tip {
+  margin-top: 10rpx;
+  font-size: 23rpx;
+  color: #667085;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 16rpx;
+}
+
+.chip {
+  padding: 14rpx 22rpx;
+  border-radius: 999rpx;
+  background: #fff;
+  color: #4b5563;
+  margin-right: 16rpx;
+  margin-bottom: 16rpx;
+  border: 2rpx solid #e5e7eb;
+}
+
+.chip.active {
+  background: #1f6fff;
+  color: #fff;
+  border-color: #1f6fff;
+}
+
+.radio-list {
+  margin-top: 16rpx;
+}
+
+.radio-item {
+  padding: 20rpx;
   border-radius: 18rpx;
+  background: #fff;
+  border: 2rpx solid #e5e7eb;
+  margin-bottom: 14rpx;
+}
+
+.radio-item.active {
+  border-color: #1f6fff;
+  background: rgba(31, 111, 255, 0.06);
+}
+
+.radio-title {
+  font-size: 27rpx;
+  font-weight: 600;
+  color: #111827;
+}
+
+.radio-desc {
+  margin-top: 8rpx;
+  font-size: 23rpx;
+  color: #667085;
+  line-height: 1.4;
+}
+
+.submit {
+  margin-top: 12rpx;
+  border-radius: 18rpx;
+  background: linear-gradient(135deg, #1f6fff, #4f8bff);
   color: #fff;
   font-size: 30rpx;
-  font-weight: 600;
 }
 </style>

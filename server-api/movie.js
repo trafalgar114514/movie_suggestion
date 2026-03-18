@@ -10,12 +10,22 @@ app.use(express.json())
 const HASH_ITERATIONS = 120000
 const HASH_KEY_LENGTH = 64
 const HASH_DIGEST = 'sha512'
+const GENRE_OPTIONS = ['动作', '喜剧', '爱情', '科幻', '悬疑', '动画', '犯罪', '冒险', '剧情', '惊悚']
+const ERA_OPTIONS = new Set(['classic', 'millennial', 'recent', 'all'])
+const STYLE_OPTIONS = new Set(['quality', 'balanced', 'trending'])
+const USER_STATUS = new Set(['active', 'banned'])
+const USER_ROLES = new Set(['user', 'admin'])
+const DEFAULT_RECOMMENDATION_WEIGHTS = {
+  item_cf_weight: 0.4,
+  user_cf_weight: 0.2,
+  popularity_weight: 0.15,
+  preference_weight: 0.25
+}
 
 function hashPassword(password, salt) {
   return crypto.pbkdf2Sync(password, salt, HASH_ITERATIONS, HASH_KEY_LENGTH, HASH_DIGEST).toString('hex')
 }
 
-// 数据库连接
 const db = mysql.createConnection({
   host: 'localhost',
   user: 'root',
@@ -23,7 +33,19 @@ const db = mysql.createConnection({
   database: 'movie_db'
 })
 
-function initUserTable() {
+const query = (sql, params = []) => db.promise().query(sql, params).then(([rows]) => rows)
+
+async function ensureColumn(tableName, definition, duplicateKeyName = 'ER_DUP_FIELDNAME') {
+  try {
+    await query(`ALTER TABLE ${tableName} ADD COLUMN ${definition}`)
+  } catch (error) {
+    if (error.code !== duplicateKeyName) {
+      console.log(`初始化${tableName}字段失败:`, error)
+    }
+  }
+}
+
+async function initUserTable() {
   const sql = `
     CREATE TABLE IF NOT EXISTS users (
       id INT PRIMARY KEY AUTO_INCREMENT,
@@ -31,28 +53,22 @@ function initUserTable() {
       nickname VARCHAR(50) NOT NULL,
       password_hash VARCHAR(128) NOT NULL,
       password_salt VARCHAR(32) NOT NULL,
-      created_at BIGINT NOT NULL
+      role VARCHAR(20) NOT NULL DEFAULT 'user',
+      status VARCHAR(20) NOT NULL DEFAULT 'active',
+      preference_profile JSON NULL,
+      created_at BIGINT NOT NULL,
+      INDEX idx_role_status (role, status)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `
 
-  db.query(sql, (err) => {
-    if (err) {
-      console.log('初始化用户表失败:', err)
-    }
-  })
+  await query(sql)
+  await ensureColumn('users', "role VARCHAR(20) NOT NULL DEFAULT 'user'")
+  await ensureColumn('users', "status VARCHAR(20) NOT NULL DEFAULT 'active'")
+  await ensureColumn('users', 'preference_profile JSON NULL')
 }
 
-function initMovieExtensionSchema() {
-  const addGenresSql = `
-    ALTER TABLE movies
-    ADD COLUMN genres JSON NULL
-  `
-
-  db.query(addGenresSql, (err) => {
-    if (err && err.code !== 'ER_DUP_FIELDNAME') {
-      console.log('初始化电影类型字段失败:', err)
-    }
-  })
+async function initMovieExtensionSchema() {
+  await ensureColumn('movies', 'genres JSON NULL')
 
   const createBehaviorSql = `
     CREATE TABLE IF NOT EXISTS user_movie_behaviors (
@@ -67,23 +83,145 @@ function initMovieExtensionSchema() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `
 
-  db.query(createBehaviorSql, (err) => {
-    if (err) {
-      console.log('初始化用户行为表失败:', err)
-    }
-  })
+  await query(createBehaviorSql)
+
+  const createConfigSql = `
+    CREATE TABLE IF NOT EXISTS recommendation_configs (
+      id TINYINT PRIMARY KEY,
+      item_cf_weight DECIMAL(6,4) NOT NULL,
+      user_cf_weight DECIMAL(6,4) NOT NULL,
+      popularity_weight DECIMAL(6,4) NOT NULL,
+      preference_weight DECIMAL(6,4) NOT NULL,
+      updated_at BIGINT NOT NULL,
+      updated_by VARCHAR(50) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `
+
+  await query(createConfigSql)
+
+  const createAuditSql = `
+    CREATE TABLE IF NOT EXISTS admin_audit_logs (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      admin_username VARCHAR(50) NOT NULL,
+      action_type VARCHAR(50) NOT NULL,
+      target_username VARCHAR(50) NULL,
+      action_detail JSON NULL,
+      created_at BIGINT NOT NULL,
+      INDEX idx_admin_created (admin_username, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `
+
+  await query(createAuditSql)
+
+  const configRows = await query('SELECT id FROM recommendation_configs WHERE id = 1 LIMIT 1')
+  if (!configRows.length) {
+    await query(
+      `
+        INSERT INTO recommendation_configs
+        (id, item_cf_weight, user_cf_weight, popularity_weight, preference_weight, updated_at, updated_by)
+        VALUES (1, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        DEFAULT_RECOMMENDATION_WEIGHTS.item_cf_weight,
+        DEFAULT_RECOMMENDATION_WEIGHTS.user_cf_weight,
+        DEFAULT_RECOMMENDATION_WEIGHTS.popularity_weight,
+        DEFAULT_RECOMMENDATION_WEIGHTS.preference_weight,
+        Date.now(),
+        'system'
+      ]
+    )
+  }
 }
 
-// 连接数据库
-db.connect((err) => {
-  if (err) {
-    console.log('数据库连接失败:', err)
-  } else {
-    console.log('数据库连接成功')
-    initUserTable()
-    initMovieExtensionSchema()
+function safeJsonParse(value, fallback) {
+  if (!value) {
+    return fallback
   }
-})
+
+  if (typeof value === 'object') {
+    return value
+  }
+
+  try {
+    return JSON.parse(value)
+  } catch (error) {
+    return fallback
+  }
+}
+
+function parseGenres(rawGenres) {
+  const parsed = safeJsonParse(rawGenres, [])
+  if (Array.isArray(parsed)) {
+    return parsed.map((item) => String(item).trim()).filter(Boolean)
+  }
+  if (typeof parsed === 'string') {
+    return parsed.split(',').map((item) => item.trim()).filter(Boolean)
+  }
+  return []
+}
+
+function normalizePreferences(inputPreferences) {
+  const favoriteGenres = Array.isArray(inputPreferences.favoriteGenres)
+    ? [...new Set(inputPreferences.favoriteGenres.map((item) => String(item).trim()).filter((item) => GENRE_OPTIONS.includes(item)))].slice(0, 5)
+    : []
+
+  const preferredEra = ERA_OPTIONS.has(inputPreferences.preferredEra) ? inputPreferences.preferredEra : 'all'
+  const discoveryStyle = STYLE_OPTIONS.has(inputPreferences.discoveryStyle) ? inputPreferences.discoveryStyle : 'balanced'
+
+  return {
+    favoriteGenres,
+    preferredEra,
+    discoveryStyle
+  }
+}
+
+function getReleaseEra(releaseDate) {
+  const year = Number(String(releaseDate || '').slice(0, 4))
+  if (!year) {
+    return 'all'
+  }
+  if (year <= 1999) {
+    return 'classic'
+  }
+  if (year <= 2014) {
+    return 'millennial'
+  }
+  return 'recent'
+}
+
+function normalizeToUnit(value, maxValue) {
+  if (!maxValue || maxValue <= 0) {
+    return 0
+  }
+  return Math.max(0, Math.min(Number(value) / maxValue, 1))
+}
+
+function calculatePreferenceScore(movie, preferences) {
+  if (!preferences) {
+    return 0
+  }
+
+  const genres = parseGenres(movie.genres)
+  const { favoriteGenres = [], preferredEra = 'all', discoveryStyle = 'balanced' } = preferences
+  const matchedGenres = favoriteGenres.filter((genre) => genres.includes(genre)).length
+  const genreScore = favoriteGenres.length ? matchedGenres / favoriteGenres.length : 0.35
+
+  const eraScore = preferredEra === 'all' ? 0.6 : Number(getReleaseEra(movie.release_date) === preferredEra)
+
+  const voteScore = normalizeToUnit(Number(movie.vote_average) || 0, 10)
+  const popularityScore = normalizeToUnit(Number(movie.popularity) || 0, 100)
+
+  let styleScore = 0.5
+  if (discoveryStyle === 'quality') {
+    styleScore = voteScore * 0.8 + popularityScore * 0.2
+  } else if (discoveryStyle === 'trending') {
+    styleScore = popularityScore * 0.8 + voteScore * 0.2
+  } else {
+    styleScore = voteScore * 0.5 + popularityScore * 0.5
+  }
+
+  return Number((genreScore * 0.55 + eraScore * 0.2 + styleScore * 0.25).toFixed(6))
+}
 
 function toScoreMap(rows) {
   const scoreMap = new Map()
@@ -205,14 +343,137 @@ function calculateUserCfScores(candidateMovieIds, username, userScoreMap, movieS
   return scores
 }
 
-// 测试接口
+function buildNormalizedMap(values) {
+  const list = Array.from(values.entries())
+  const rawNumbers = list.map(([, value]) => Number(value) || 0)
+  const max = Math.max(...rawNumbers, 0)
+  const min = Math.min(...rawNumbers, 0)
+  const normalized = new Map()
+
+  list.forEach(([key, value]) => {
+    const safeValue = Number(value) || 0
+    if (max === min) {
+      normalized.set(key, safeValue > 0 ? 1 : 0)
+      return
+    }
+    normalized.set(key, (safeValue - min) / (max - min))
+  })
+
+  return normalized
+}
+
+function normalizeWeightConfig(config) {
+  const values = {
+    item_cf_weight: Math.max(Number(config.item_cf_weight) || 0, 0),
+    user_cf_weight: Math.max(Number(config.user_cf_weight) || 0, 0),
+    popularity_weight: Math.max(Number(config.popularity_weight) || 0, 0),
+    preference_weight: Math.max(Number(config.preference_weight) || 0, 0)
+  }
+
+  const sum = Object.values(values).reduce((total, item) => total + item, 0)
+  if (!sum) {
+    return { ...DEFAULT_RECOMMENDATION_WEIGHTS }
+  }
+
+  return {
+    item_cf_weight: values.item_cf_weight / sum,
+    user_cf_weight: values.user_cf_weight / sum,
+    popularity_weight: values.popularity_weight / sum,
+    preference_weight: values.preference_weight / sum
+  }
+}
+
+function formatUser(user) {
+  return {
+    id: user.id,
+    username: user.username,
+    nickname: user.nickname,
+    role: user.role,
+    status: user.status,
+    preference_profile: normalizePreferences(safeJsonParse(user.preference_profile, {})),
+    created_at: user.created_at
+  }
+}
+
+async function findUser(username) {
+  if (!username) {
+    return null
+  }
+  const rows = await query(
+    `
+      SELECT id, username, nickname, password_hash, password_salt, role, status, preference_profile, created_at
+      FROM users
+      WHERE username = ?
+      LIMIT 1
+    `,
+    [username]
+  )
+  return rows[0] || null
+}
+
+async function ensureActiveUser(username) {
+  const user = await findUser(username)
+  if (!user) {
+    return { ok: false, code: 404, message: '用户不存在' }
+  }
+  if (user.status !== 'active') {
+    return { ok: false, code: 403, message: '账号已被禁用，请联系管理员' }
+  }
+  return { ok: true, user }
+}
+
+async function requireAdmin(adminUsername) {
+  const result = await ensureActiveUser(adminUsername)
+  if (!result.ok) {
+    return result
+  }
+  if (result.user.role !== 'admin') {
+    return { ok: false, code: 403, message: '仅管理员可执行此操作' }
+  }
+  return result
+}
+
+async function getRecommendationConfig() {
+  const rows = await query('SELECT * FROM recommendation_configs WHERE id = 1 LIMIT 1')
+  return rows[0] || { ...DEFAULT_RECOMMENDATION_WEIGHTS, updated_at: 0, updated_by: 'system' }
+}
+
+async function writeAdminAuditLog(adminUsername, actionType, targetUsername, actionDetail) {
+  await query(
+    `
+      INSERT INTO admin_audit_logs (admin_username, action_type, target_username, action_detail, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `,
+    [adminUsername, actionType, targetUsername || null, JSON.stringify(actionDetail || null), Date.now()]
+  )
+}
+
+function sendError(res, error, fallbackMessage) {
+  console.log(error)
+  res.send({ code: 500, message: fallbackMessage })
+}
+
+db.connect(async (err) => {
+  if (err) {
+    console.log('数据库连接失败:', err)
+    return
+  }
+
+  console.log('数据库连接成功')
+  try {
+    await initUserTable()
+    await initMovieExtensionSchema()
+  } catch (error) {
+    console.log('初始化数据库结构失败:', error)
+  }
+})
+
 app.get('/api/test', (req, res) => {
   res.json({ msg: 'ok' })
 })
 
-// 注册
-app.post('/api/auth/register', (req, res) => {
-  const { username, password, nickname } = req.body || {}
+app.post('/api/auth/register', async (req, res) => {
+  const { username, password, nickname, preferences } = req.body || {}
 
   if (!username || !password) {
     res.send({ code: 400, message: '请填写用户名和密码' })
@@ -224,45 +485,42 @@ app.post('/api/auth/register', (req, res) => {
     return
   }
 
-  const findSql = 'SELECT id FROM users WHERE username = ? LIMIT 1'
-  db.query(findSql, [username], (findErr, findResult) => {
-    if (findErr) {
-      console.log(findErr)
-      res.send({ code: 500, message: '注册失败，请稍后重试' })
-      return
-    }
+  const normalizedPreferences = normalizePreferences(preferences || {})
+  if (!normalizedPreferences.favoriteGenres.length) {
+    res.send({ code: 400, message: '请至少选择一个喜欢的电影类型' })
+    return
+  }
 
-    if (findResult.length) {
+  try {
+    const existed = await query('SELECT id FROM users WHERE username = ? LIMIT 1', [username])
+    if (existed.length) {
       res.send({ code: 409, message: '用户名已存在' })
       return
     }
 
+    const adminCountRows = await query("SELECT COUNT(*) AS total FROM users WHERE role = 'admin'")
+    const role = Number(adminCountRows[0].total) > 0 ? 'user' : 'admin'
     const salt = crypto.randomBytes(16).toString('hex')
     const passwordHash = hashPassword(password, salt)
 
-    const insertSql = `
-      INSERT INTO users (username, nickname, password_hash, password_salt, created_at)
-      VALUES (?, ?, ?, ?, ?)
-    `
-
-    db.query(
-      insertSql,
-      [username, nickname || username, passwordHash, salt, Date.now()],
-      (insertErr) => {
-        if (insertErr) {
-          console.log(insertErr)
-          res.send({ code: 500, message: '注册失败，请稍后重试' })
-          return
-        }
-
-        res.send({ code: 200, message: '注册成功，请登录' })
-      }
+    await query(
+      `
+        INSERT INTO users (username, nickname, password_hash, password_salt, role, status, preference_profile, created_at)
+        VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
+      `,
+      [username, nickname || username, passwordHash, salt, role, JSON.stringify(normalizedPreferences), Date.now()]
     )
-  })
+
+    res.send({
+      code: 200,
+      message: role === 'admin' ? '注册成功，你已成为首位管理员，请登录' : '注册成功，请登录'
+    })
+  } catch (error) {
+    sendError(res, error, '注册失败，请稍后重试')
+  }
 })
 
-// 登录
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body || {}
 
   if (!username || !password) {
@@ -270,23 +528,15 @@ app.post('/api/auth/login', (req, res) => {
     return
   }
 
-  const sql = `
-    SELECT username, nickname, password_hash, password_salt
-    FROM users
-    WHERE username = ?
-    LIMIT 1
-  `
-
-  db.query(sql, [username], (err, result) => {
-    if (err) {
-      console.log(err)
-      res.send({ code: 500, message: '登录失败，请稍后重试' })
+  try {
+    const user = await findUser(username)
+    if (!user) {
+      res.send({ code: 401, message: '用户名或密码错误' })
       return
     }
 
-    const user = result[0]
-    if (!user) {
-      res.send({ code: 401, message: '用户名或密码错误' })
+    if (user.status !== 'active') {
+      res.send({ code: 403, message: '账号已被禁用，请联系管理员' })
       return
     }
 
@@ -301,103 +551,66 @@ app.post('/api/auth/login', (req, res) => {
       message: '登录成功',
       data: {
         username: user.username,
-        nickname: user.nickname
+        nickname: user.nickname,
+        role: user.role,
+        status: user.status,
+        preferences: normalizePreferences(safeJsonParse(user.preference_profile, {}))
       }
     })
-  })
+  } catch (error) {
+    sendError(res, error, '登录失败，请稍后重试')
+  }
 })
 
-// =====================
-// 获取首页电影（前20条）
-// =====================
-app.get('/api/movies', (req, res) => {
-  const sql = `
-        SELECT
-            id,
-            chinese_name,
-            poster_path,
-            vote_average,
-            release_date,
-            genres
+app.get('/api/movies', async (req, res) => {
+  try {
+    const rows = await query(
+      `
+        SELECT id, chinese_name, poster_path, vote_average, release_date, genres, popularity
         FROM movies
         ORDER BY popularity DESC
         LIMIT 20
-    `
+      `
+    )
 
-  db.query(sql, (err, result) => {
-    if (err) {
-      console.log(err)
-      res.send({ code: 500 })
-    } else {
-      res.send({
-        code: 200,
-        data: result
-      })
-    }
-  })
+    res.send({ code: 200, data: rows })
+  } catch (error) {
+    sendError(res, error, '获取电影列表失败')
+  }
 })
 
-// =====================
-// 搜索电影
-// =====================
-app.get('/api/search', (req, res) => {
-  const keyword = req.query.keyword
+app.get('/api/search', async (req, res) => {
+  const keyword = req.query.keyword || ''
 
-  const sql = `
-        SELECT
-            id,
-            chinese_name,
-            poster_path,
-            vote_average,
-            release_date,
-            genres
+  try {
+    const rows = await query(
+      `
+        SELECT id, chinese_name, poster_path, vote_average, release_date, genres, popularity
         FROM movies
         WHERE chinese_name LIKE ?
         LIMIT 50
-    `
+      `,
+      [`%${keyword}%`]
+    )
 
-  db.query(sql, [`%${keyword}%`], (err, result) => {
-    if (err) {
-      console.log(err)
-      res.send({ code: 500 })
-    } else {
-      res.send({
-        code: 200,
-        data: result
-      })
-    }
-  })
+    res.send({ code: 200, data: rows })
+  } catch (error) {
+    sendError(res, error, '搜索失败')
+  }
 })
 
-// =====================
-// 电影详情
-// =====================
-app.get('/api/movie', (req, res) => {
+app.get('/api/movie', async (req, res) => {
   const id = req.query.id
 
-  const sql = `
-        SELECT *
-        FROM movies
-        WHERE id = ?
-    `
-
-  db.query(sql, [id], (err, result) => {
-    if (err) {
-      console.log(err)
-      res.send({ code: 500 })
-    } else {
-      res.send({
-        code: 200,
-        data: result[0]
-      })
-    }
-  })
+  try {
+    const rows = await query('SELECT * FROM movies WHERE id = ?', [id])
+    res.send({ code: 200, data: rows[0] || null })
+  } catch (error) {
+    sendError(res, error, '获取详情失败')
+  }
 })
 
-// =====================
-// 记录用户行为（供推荐使用）
-// =====================
-app.post('/api/behavior', (req, res) => {
+app.post('/api/behavior', async (req, res) => {
   const { username, movie_id: movieId, behavior_type: behaviorType, score } = req.body || {}
 
   if (!username || !movieId || !behaviorType) {
@@ -411,136 +624,366 @@ app.post('/api/behavior', (req, res) => {
     return
   }
 
-  const safeScore = Number(score) > 0 ? Number(score) : 1
-  const sql = `
-    INSERT INTO user_movie_behaviors (username, movie_id, behavior_type, score, created_at)
-    VALUES (?, ?, ?, ?, ?)
-  `
-
-  db.query(sql, [username, movieId, behaviorType, safeScore, Date.now()], (err) => {
-    if (err) {
-      console.log(err)
-      res.send({ code: 500, message: '记录行为失败' })
+  try {
+    const activeResult = await ensureActiveUser(username)
+    if (!activeResult.ok) {
+      res.send({ code: activeResult.code, message: activeResult.message })
       return
     }
 
+    const safeScore = Number(score) > 0 ? Number(score) : 1
+    await query(
+      `
+        INSERT INTO user_movie_behaviors (username, movie_id, behavior_type, score, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `,
+      [username, movieId, behaviorType, safeScore, Date.now()]
+    )
+
     res.send({ code: 200, message: 'ok' })
-  })
+  } catch (error) {
+    sendError(res, error, '记录行为失败')
+  }
 })
 
-// =====================
-// 推荐接口（主：ItemCF；辅：UserCF）
-// =====================
-app.get('/api/recommend', (req, res) => {
+app.get('/api/recommend', async (req, res) => {
   const username = req.query.username
   const limit = Number(req.query.limit) > 0 ? Number(req.query.limit) : 20
 
-  if (!username) {
-    res.send({ code: 400, message: '请提供username' })
-    return
-  }
-
-  const userBehaviorSql = `
-    SELECT movie_id, SUM(score) AS total_score
-    FROM user_movie_behaviors
-    WHERE username = ?
-    GROUP BY movie_id
-  `
-
-  db.query(userBehaviorSql, [username], (userErr, userRows) => {
-    if (userErr) {
-      console.log(userErr)
-      res.send({ code: 500, message: '推荐计算失败' })
-      return
-    }
-
-    if (!userRows.length) {
-      const coldStartSql = `
-        SELECT id, chinese_name, poster_path, vote_average, release_date, genres
+  try {
+    const config = normalizeWeightConfig(await getRecommendationConfig())
+    const candidateRows = await query(
+      `
+        SELECT id, chinese_name, poster_path, vote_average, release_date, genres, popularity
         FROM movies
         ORDER BY popularity DESC
-        LIMIT ?
+        LIMIT 500
       `
-      db.query(coldStartSql, [limit], (coldErr, coldRows) => {
-        if (coldErr) {
-          console.log(coldErr)
-          res.send({ code: 500, message: '推荐计算失败' })
-          return
-        }
-        res.send({ code: 200, data: coldRows })
-      })
+    )
+
+    if (!username) {
+      const guestRows = candidateRows.map((movie) => ({
+        ...movie,
+        recommendation_score: Number((normalizeToUnit(Number(movie.popularity) || 0, 100) * 0.65 + normalizeToUnit(Number(movie.vote_average) || 0, 10) * 0.35).toFixed(6))
+      }))
+      res.send({ code: 200, data: guestRows.slice(0, limit), meta: { mode: 'guest' } })
       return
     }
 
-    const userScoreMap = toScoreMap(userRows)
-    const seenMovieIds = [...userScoreMap.keys()]
+    const activeResult = await ensureActiveUser(username)
+    if (!activeResult.ok) {
+      res.send({ code: activeResult.code, message: activeResult.message })
+      return
+    }
 
-    const candidateSql = `
-      SELECT id, chinese_name, poster_path, vote_average, release_date, genres, popularity
-      FROM movies
-      WHERE id NOT IN (?)
-      LIMIT 1000
-    `
+    const userPreferences = normalizePreferences(safeJsonParse(activeResult.user.preference_profile, {}))
+    const userBehaviorRows = await query(
+      `
+        SELECT movie_id, SUM(score) AS total_score
+        FROM user_movie_behaviors
+        WHERE username = ?
+        GROUP BY movie_id
+      `,
+      [username]
+    )
 
-    db.query(candidateSql, [seenMovieIds], (candidateErr, candidateRows) => {
-      if (candidateErr) {
-        console.log(candidateErr)
-        res.send({ code: 500, message: '推荐计算失败' })
-        return
-      }
+    const seenMovieIds = userBehaviorRows.map((item) => item.movie_id)
+    const filteredCandidates = seenMovieIds.length
+      ? candidateRows.filter((item) => !seenMovieIds.includes(item.id))
+      : candidateRows
 
-      if (!candidateRows.length) {
-        res.send({ code: 200, data: [] })
-        return
-      }
+    const preferenceMap = new Map()
+    const popularityMap = new Map()
+    filteredCandidates.forEach((movie) => {
+      preferenceMap.set(movie.id, calculatePreferenceScore(movie, userPreferences))
+      popularityMap.set(movie.id, Number(movie.popularity) || 0)
+    })
 
-      const allBehaviorSql = `
+    const normalizedPreferenceMap = buildNormalizedMap(preferenceMap)
+    const normalizedPopularityMap = buildNormalizedMap(popularityMap)
+
+    if (!userBehaviorRows.length) {
+      const ranked = filteredCandidates
+        .map((movie) => ({
+          id: movie.id,
+          chinese_name: movie.chinese_name,
+          poster_path: movie.poster_path,
+          vote_average: movie.vote_average,
+          release_date: movie.release_date,
+          genres: movie.genres,
+          recommendation_score: Number((
+            normalizedPreferenceMap.get(movie.id) * Math.max(config.preference_weight, 0.6) +
+            normalizedPopularityMap.get(movie.id) * Math.max(config.popularity_weight, 0.2)
+          ).toFixed(6))
+        }))
+        .sort((a, b) => b.recommendation_score - a.recommendation_score)
+        .slice(0, limit)
+
+      res.send({ code: 200, data: ranked, meta: { mode: 'preference-cold-start' } })
+      return
+    }
+
+    const userScoreMap = toScoreMap(userBehaviorRows)
+    const candidateMovieIds = filteredCandidates.map((item) => item.id)
+    const behaviorRows = await query(
+      `
         SELECT username, movie_id, SUM(score) AS total_score
         FROM user_movie_behaviors
         GROUP BY username, movie_id
       `
+    )
 
-      db.query(allBehaviorSql, (allErr, behaviorRows) => {
-        if (allErr) {
-          console.log(allErr)
-          res.send({ code: 500, message: '推荐计算失败' })
-          return
+    const { scores: itemCfScores, movieScoresByUser } = calculateItemCfScores(candidateMovieIds, userScoreMap, behaviorRows)
+    const userCfScores = calculateUserCfScores(candidateMovieIds, username, userScoreMap, movieScoresByUser)
+    const normalizedItemMap = buildNormalizedMap(itemCfScores)
+    const normalizedUserMap = buildNormalizedMap(userCfScores)
+
+    const ranked = filteredCandidates
+      .map((movie) => {
+        const finalScore =
+          (normalizedItemMap.get(movie.id) || 0) * config.item_cf_weight +
+          (normalizedUserMap.get(movie.id) || 0) * config.user_cf_weight +
+          (normalizedPopularityMap.get(movie.id) || 0) * config.popularity_weight +
+          (normalizedPreferenceMap.get(movie.id) || 0) * config.preference_weight
+
+        return {
+          id: movie.id,
+          chinese_name: movie.chinese_name,
+          poster_path: movie.poster_path,
+          vote_average: movie.vote_average,
+          release_date: movie.release_date,
+          genres: movie.genres,
+          recommendation_score: Number(finalScore.toFixed(6))
         }
-
-        const candidateMovieIds = candidateRows.map((item) => item.id)
-        const { scores: itemCfScores, movieScoresByUser } = calculateItemCfScores(
-          candidateMovieIds,
-          userScoreMap,
-          behaviorRows
-        )
-
-        // UserCF只作为补充，权重保持较小
-        const userCfScores = calculateUserCfScores(candidateMovieIds, username, userScoreMap, movieScoresByUser)
-
-        const ranked = candidateRows
-          .map((movie) => {
-            const itemScore = itemCfScores.get(movie.id) || 0
-            const userScore = userCfScores.get(movie.id) || 0
-            const popularityScore = Number(movie.popularity) || 0
-            const finalScore = itemScore * 0.85 + userScore * 0.1 + popularityScore * 0.05
-
-            return {
-              id: movie.id,
-              chinese_name: movie.chinese_name,
-              poster_path: movie.poster_path,
-              vote_average: movie.vote_average,
-              release_date: movie.release_date,
-              genres: movie.genres,
-              recommendation_score: Number(finalScore.toFixed(6))
-            }
-          })
-          .sort((a, b) => b.recommendation_score - a.recommendation_score)
-          .slice(0, limit)
-
-        res.send({ code: 200, data: ranked })
       })
+      .sort((a, b) => b.recommendation_score - a.recommendation_score)
+      .slice(0, limit)
+
+    res.send({ code: 200, data: ranked, meta: { mode: 'hybrid' } })
+  } catch (error) {
+    sendError(res, error, '推荐计算失败')
+  }
+})
+
+app.get('/api/admin/overview', async (req, res) => {
+  const adminUsername = req.query.admin_username
+
+  try {
+    const adminResult = await requireAdmin(adminUsername)
+    if (!adminResult.ok) {
+      res.send({ code: adminResult.code, message: adminResult.message })
+      return
+    }
+
+    const userCountRows = await query(
+      `
+        SELECT
+          COUNT(*) AS total_users,
+          SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_users,
+          SUM(CASE WHEN status = 'banned' THEN 1 ELSE 0 END) AS banned_users,
+          SUM(CASE WHEN role = 'admin' THEN 1 ELSE 0 END) AS admin_users
+        FROM users
+      `
+    )
+    const behaviorRows = await query(
+      `
+        SELECT behavior_type, COUNT(*) AS total
+        FROM user_movie_behaviors
+        GROUP BY behavior_type
+      `
+    )
+    const logs = await query(
+      `
+        SELECT id, admin_username, action_type, target_username, action_detail, created_at
+        FROM admin_audit_logs
+        ORDER BY created_at DESC
+        LIMIT 10
+      `
+    )
+
+    res.send({
+      code: 200,
+      data: {
+        stats: {
+          ...userCountRows[0],
+          behavior_summary: behaviorRows
+        },
+        recent_logs: logs.map((item) => ({
+          ...item,
+          action_detail: safeJsonParse(item.action_detail, null)
+        }))
+      }
     })
-  })
+  } catch (error) {
+    sendError(res, error, '获取管理员概览失败')
+  }
+})
+
+app.get('/api/admin/users', async (req, res) => {
+  const adminUsername = req.query.admin_username
+
+  try {
+    const adminResult = await requireAdmin(adminUsername)
+    if (!adminResult.ok) {
+      res.send({ code: adminResult.code, message: adminResult.message })
+      return
+    }
+
+    const rows = await query(
+      `
+        SELECT id, username, nickname, role, status, preference_profile, created_at
+        FROM users
+        ORDER BY created_at DESC
+      `
+    )
+
+    res.send({ code: 200, data: rows.map(formatUser) })
+  } catch (error) {
+    sendError(res, error, '获取用户列表失败')
+  }
+})
+
+app.post('/api/admin/users/status', async (req, res) => {
+  const { admin_username: adminUsername, target_username: targetUsername, status } = req.body || {}
+
+  if (!targetUsername || !USER_STATUS.has(status)) {
+    res.send({ code: 400, message: '参数不合法' })
+    return
+  }
+
+  try {
+    const adminResult = await requireAdmin(adminUsername)
+    if (!adminResult.ok) {
+      res.send({ code: adminResult.code, message: adminResult.message })
+      return
+    }
+
+    if (adminUsername === targetUsername && status === 'banned') {
+      res.send({ code: 400, message: '不能封禁当前管理员自己' })
+      return
+    }
+
+    const targetUser = await findUser(targetUsername)
+    if (!targetUser) {
+      res.send({ code: 404, message: '目标用户不存在' })
+      return
+    }
+
+    await query('UPDATE users SET status = ? WHERE username = ?', [status, targetUsername])
+    await writeAdminAuditLog(adminUsername, 'update_user_status', targetUsername, { status })
+    res.send({ code: 200, message: status === 'banned' ? '封号成功' : '已恢复账号' })
+  } catch (error) {
+    sendError(res, error, '更新用户状态失败')
+  }
+})
+
+app.post('/api/admin/users/role', async (req, res) => {
+  const { admin_username: adminUsername, target_username: targetUsername, role } = req.body || {}
+
+  if (!targetUsername || !USER_ROLES.has(role)) {
+    res.send({ code: 400, message: '参数不合法' })
+    return
+  }
+
+  try {
+    const adminResult = await requireAdmin(adminUsername)
+    if (!adminResult.ok) {
+      res.send({ code: adminResult.code, message: adminResult.message })
+      return
+    }
+
+    const targetUser = await findUser(targetUsername)
+    if (!targetUser) {
+      res.send({ code: 404, message: '目标用户不存在' })
+      return
+    }
+
+    if (adminUsername === targetUsername && role !== 'admin') {
+      res.send({ code: 400, message: '不能移除当前管理员自己的管理员身份' })
+      return
+    }
+
+    await query('UPDATE users SET role = ? WHERE username = ?', [role, targetUsername])
+    await writeAdminAuditLog(adminUsername, 'update_user_role', targetUsername, { role })
+    res.send({ code: 200, message: role === 'admin' ? '已授予管理员权限' : '已取消管理员权限' })
+  } catch (error) {
+    sendError(res, error, '更新用户角色失败')
+  }
+})
+
+app.get('/api/admin/recommendation-config', async (req, res) => {
+  const adminUsername = req.query.admin_username
+
+  try {
+    const adminResult = await requireAdmin(adminUsername)
+    if (!adminResult.ok) {
+      res.send({ code: adminResult.code, message: adminResult.message })
+      return
+    }
+
+    const config = await getRecommendationConfig()
+    res.send({
+      code: 200,
+      data: {
+        ...config,
+        normalized: normalizeWeightConfig(config)
+      }
+    })
+  } catch (error) {
+    sendError(res, error, '获取推荐配置失败')
+  }
+})
+
+app.post('/api/admin/recommendation-config', async (req, res) => {
+  const {
+    admin_username: adminUsername,
+    item_cf_weight: itemCfWeight,
+    user_cf_weight: userCfWeight,
+    popularity_weight: popularityWeight,
+    preference_weight: preferenceWeight
+  } = req.body || {}
+
+  const nextConfig = {
+    item_cf_weight: Number(itemCfWeight),
+    user_cf_weight: Number(userCfWeight),
+    popularity_weight: Number(popularityWeight),
+    preference_weight: Number(preferenceWeight)
+  }
+
+  const invalid = Object.values(nextConfig).some((item) => Number.isNaN(item) || item < 0)
+  if (invalid) {
+    res.send({ code: 400, message: '推荐权重必须是大于等于0的数字' })
+    return
+  }
+
+  try {
+    const adminResult = await requireAdmin(adminUsername)
+    if (!adminResult.ok) {
+      res.send({ code: adminResult.code, message: adminResult.message })
+      return
+    }
+
+    await query(
+      `
+        UPDATE recommendation_configs
+        SET item_cf_weight = ?, user_cf_weight = ?, popularity_weight = ?, preference_weight = ?, updated_at = ?, updated_by = ?
+        WHERE id = 1
+      `,
+      [
+        nextConfig.item_cf_weight,
+        nextConfig.user_cf_weight,
+        nextConfig.popularity_weight,
+        nextConfig.preference_weight,
+        Date.now(),
+        adminUsername
+      ]
+    )
+
+    await writeAdminAuditLog(adminUsername, 'update_recommendation_weight', null, nextConfig)
+    res.send({ code: 200, message: '推荐算法权重已更新' })
+  } catch (error) {
+    sendError(res, error, '更新推荐配置失败')
+  }
 })
 
 app.listen(3000, () => {
