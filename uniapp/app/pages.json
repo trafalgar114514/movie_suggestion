@@ -30,6 +30,12 @@
         "navigationBarTitleText": "登录 / 注册",
         "navigationStyle": "custom"
       }
+    },
+    {
+      "path": "pages/admin/admin",
+      "style": {
+        "navigationBarTitleText": "管理员中心"
+      }
     }
   ],
   "tabBar": {
