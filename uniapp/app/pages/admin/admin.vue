@@ -122,13 +122,19 @@ export default {
         item_cf_weight: 0.4,
         user_cf_weight: 0.2,
         popularity_weight: 0.15,
-        preference_weight: 0.25
+        preference_weight: 0.2,
+        behavior_profile_weight: 0.15,
+        diversity_weight: 0.07,
+        random_weight: 0.03
       },
       weightFields: [
         { key: 'item_cf_weight', label: 'ItemCF 权重' },
         { key: 'user_cf_weight', label: 'UserCF 权重' },
         { key: 'popularity_weight', label: '热门度权重' },
-        { key: 'preference_weight', label: '注册偏好权重' }
+        { key: 'preference_weight', label: '注册偏好权重' },
+        { key: 'behavior_profile_weight', label: '行为画像权重' },
+        { key: 'diversity_weight', label: '多样性权重' },
+        { key: 'random_weight', label: '随机探索权重' }
       ]
     }
   },
@@ -175,7 +181,10 @@ export default {
           item_cf_weight: Number(res.data.item_cf_weight),
           user_cf_weight: Number(res.data.user_cf_weight),
           popularity_weight: Number(res.data.popularity_weight),
-          preference_weight: Number(res.data.preference_weight)
+          preference_weight: Number(res.data.preference_weight),
+          behavior_profile_weight: Number(res.data.behavior_profile_weight),
+          diversity_weight: Number(res.data.diversity_weight),
+          random_weight: Number(res.data.random_weight)
         }
       }
     },
@@ -188,7 +197,10 @@ export default {
         item_cf_weight: Number(this.configForm.item_cf_weight),
         user_cf_weight: Number(this.configForm.user_cf_weight),
         popularity_weight: Number(this.configForm.popularity_weight),
-        preference_weight: Number(this.configForm.preference_weight)
+        preference_weight: Number(this.configForm.preference_weight),
+        behavior_profile_weight: Number(this.configForm.behavior_profile_weight),
+        diversity_weight: Number(this.configForm.diversity_weight),
+        random_weight: Number(this.configForm.random_weight)
       }
       const res = await apiRequest('/api/admin/recommendation-config', {
         method: 'POST',
