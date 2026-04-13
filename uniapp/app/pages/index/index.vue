@@ -250,20 +250,21 @@ export default {
 <style>
 .container {
   padding: 24rpx;
-  background: #f5f7fb;
+  background: linear-gradient(180deg, #f2f6ff 0%, #f7f9fc 35%, #f3f6fb 100%);
   min-height: 100vh;
 }
 
 .hero-card,
 .section-card {
-  background: #fff;
-  border-radius: 24rpx;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 26rpx;
   padding: 26rpx;
-  box-shadow: 0 12rpx 32rpx rgba(15, 23, 42, 0.06);
+  box-shadow: 0 14rpx 36rpx rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(8rpx);
 }
 
 .hero-card {
-  background: linear-gradient(135deg, #1f6fff, #5e94ff);
+  background: linear-gradient(135deg, #1e5eff, #6a9bff);
   color: #fff;
 }
 
@@ -289,7 +290,8 @@ export default {
   justify-content: center;
   padding: 18rpx 28rpx;
   border-radius: 999rpx;
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.2);
+  border: 1rpx solid rgba(255, 255, 255, 0.3);
   font-size: 26rpx;
 }
 
@@ -401,10 +403,11 @@ export default {
 
 .movie-card {
   display: flex;
-  background: #f8fafc;
+  background: linear-gradient(145deg, #f8fbff, #f4f7fb);
   margin-top: 20rpx;
   padding: 20rpx;
   border-radius: 20rpx;
+  border: 1rpx solid #e7edf8;
 }
 
 .poster {

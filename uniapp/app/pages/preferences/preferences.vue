@@ -180,15 +180,15 @@ export default {
 .container {
   min-height: 100vh;
   padding: 24rpx;
-  background: #f5f7fb;
+  background: linear-gradient(180deg, #f2f6ff 0%, #f8faff 40%, #f3f6fb 100%);
 }
 
 .hero-card,
 .section-card {
-  background: #fff;
+  background: rgba(255, 255, 255, 0.94);
   border-radius: 24rpx;
   padding: 26rpx;
-  box-shadow: 0 12rpx 32rpx rgba(15, 23, 42, 0.06);
+  box-shadow: 0 14rpx 36rpx rgba(15, 23, 42, 0.08);
 }
 
 .hero-card {

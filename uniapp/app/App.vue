@@ -13,5 +13,17 @@
 </script>
 
 <style>
-	/*每个页面公共css */
+page {
+  background: #f3f6fb;
+  color: #111827;
+  font-family: 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
+}
+
+button {
+  border: none;
+}
+
+button::after {
+  border: none;
+}
 </style>

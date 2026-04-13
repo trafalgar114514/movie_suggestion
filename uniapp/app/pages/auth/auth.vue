@@ -199,7 +199,7 @@ export default {
   width: 100%;
   height: 96rpx;
   box-sizing: border-box;
-  background: #f5f7fb;
+  background: linear-gradient(180deg, #f2f6ff 0%, #f8faff 40%, #f3f6fb 100%);
   border-radius: 18rpx;
   padding: 0 24rpx;
   font-size: 28rpx;
