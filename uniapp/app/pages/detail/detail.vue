@@ -188,7 +188,7 @@ export default {
 <style>
 .container {
   padding: 24rpx;
-  background: #f5f7fb;
+  background: linear-gradient(180deg, #f2f6ff 0%, #f8faff 40%, #f3f6fb 100%);
   min-height: 100vh;
 }
 
