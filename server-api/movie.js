@@ -19,7 +19,15 @@ const DEFAULT_RECOMMENDATION_WEIGHTS = {
   item_cf_weight: 0.4,
   user_cf_weight: 0.2,
   popularity_weight: 0.15,
-  preference_weight: 0.25
+  preference_weight: 0.2,
+  behavior_profile_weight: 0.15,
+  diversity_weight: 0.07,
+  random_weight: 0.03
+}
+const BEHAVIOR_BASE_WEIGHTS = {
+  view: 1,
+  like: 1.6,
+  favorite: 2.2
 }
 
 function hashPassword(password, salt) {
@@ -92,12 +100,18 @@ async function initMovieExtensionSchema() {
       user_cf_weight DECIMAL(6,4) NOT NULL,
       popularity_weight DECIMAL(6,4) NOT NULL,
       preference_weight DECIMAL(6,4) NOT NULL,
+      behavior_profile_weight DECIMAL(6,4) NOT NULL,
+      diversity_weight DECIMAL(6,4) NOT NULL,
+      random_weight DECIMAL(6,4) NOT NULL,
       updated_at BIGINT NOT NULL,
       updated_by VARCHAR(50) NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `
 
   await query(createConfigSql)
+  await ensureColumn('recommendation_configs', 'behavior_profile_weight DECIMAL(6,4) NOT NULL DEFAULT 0.15')
+  await ensureColumn('recommendation_configs', 'diversity_weight DECIMAL(6,4) NOT NULL DEFAULT 0.07')
+  await ensureColumn('recommendation_configs', 'random_weight DECIMAL(6,4) NOT NULL DEFAULT 0.03')
 
   const createAuditSql = `
     CREATE TABLE IF NOT EXISTS admin_audit_logs (
@@ -118,14 +132,28 @@ async function initMovieExtensionSchema() {
     await query(
       `
         INSERT INTO recommendation_configs
-        (id, item_cf_weight, user_cf_weight, popularity_weight, preference_weight, updated_at, updated_by)
-        VALUES (1, ?, ?, ?, ?, ?, ?)
+        (
+          id,
+          item_cf_weight,
+          user_cf_weight,
+          popularity_weight,
+          preference_weight,
+          behavior_profile_weight,
+          diversity_weight,
+          random_weight,
+          updated_at,
+          updated_by
+        )
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         DEFAULT_RECOMMENDATION_WEIGHTS.item_cf_weight,
         DEFAULT_RECOMMENDATION_WEIGHTS.user_cf_weight,
         DEFAULT_RECOMMENDATION_WEIGHTS.popularity_weight,
         DEFAULT_RECOMMENDATION_WEIGHTS.preference_weight,
+        DEFAULT_RECOMMENDATION_WEIGHTS.behavior_profile_weight,
+        DEFAULT_RECOMMENDATION_WEIGHTS.diversity_weight,
+        DEFAULT_RECOMMENDATION_WEIGHTS.random_weight,
         Date.now(),
         'system'
       ]
@@ -222,6 +250,108 @@ function calculatePreferenceScore(movie, preferences) {
   }
 
   return Number((genreScore * 0.55 + eraScore * 0.2 + styleScore * 0.25).toFixed(6))
+}
+
+function getBehaviorRecencyFactor(createdAt) {
+  const ageMs = Date.now() - (Number(createdAt) || Date.now())
+  const ageDays = Math.max(ageMs / (1000 * 60 * 60 * 24), 0)
+  return 0.45 + 0.55 * Math.exp(-ageDays / 180)
+}
+
+function inferMovieStyle(movie) {
+  const voteScore = normalizeToUnit(Number(movie.vote_average) || 0, 10)
+  const popularityScore = normalizeToUnit(Number(movie.popularity) || 0, 100)
+  return {
+    quality: voteScore * 0.75 + popularityScore * 0.25,
+    trending: popularityScore * 0.75 + voteScore * 0.25,
+    balanced: voteScore * 0.5 + popularityScore * 0.5
+  }
+}
+
+function buildBehaviorPortrait(behaviorRows) {
+  const genreWeights = new Map()
+  const eraWeights = new Map()
+  let qualityWeight = 0
+  let trendingWeight = 0
+  let balancedWeight = 0
+  let totalWeight = 0
+
+  behaviorRows.forEach((row) => {
+    const behaviorWeight = BEHAVIOR_BASE_WEIGHTS[row.behavior_type] || 1
+    const scoreWeight = Math.max(Number(row.score) || 1, 0.5)
+    const recencyWeight = getBehaviorRecencyFactor(row.created_at)
+    const total = behaviorWeight * scoreWeight * recencyWeight
+    totalWeight += total
+
+    parseGenres(row.genres).forEach((genre) => {
+      genreWeights.set(genre, (genreWeights.get(genre) || 0) + total)
+    })
+
+    const era = getReleaseEra(row.release_date)
+    eraWeights.set(era, (eraWeights.get(era) || 0) + total)
+
+    const style = inferMovieStyle(row)
+    qualityWeight += style.quality * total
+    trendingWeight += style.trending * total
+    balancedWeight += style.balanced * total
+  })
+
+  if (!totalWeight) {
+    return {
+      totalWeight: 0,
+      genreAffinity: new Map(),
+      eraAffinity: new Map(),
+      styleAffinity: { quality: 0.5, trending: 0.5, balanced: 0.5 }
+    }
+  }
+
+  const genreAffinity = new Map()
+  genreWeights.forEach((value, key) => {
+    genreAffinity.set(key, value / totalWeight)
+  })
+
+  const eraAffinity = new Map()
+  eraWeights.forEach((value, key) => {
+    eraAffinity.set(key, value / totalWeight)
+  })
+
+  return {
+    totalWeight,
+    genreAffinity,
+    eraAffinity,
+    styleAffinity: {
+      quality: qualityWeight / totalWeight,
+      trending: trendingWeight / totalWeight,
+      balanced: balancedWeight / totalWeight
+    }
+  }
+}
+
+function calculateBehaviorPortraitScore(movie, behaviorPortrait, preferences) {
+  if (!behaviorPortrait || !behaviorPortrait.totalWeight) {
+    return 0
+  }
+
+  const movieGenres = parseGenres(movie.genres)
+  const genreScore = movieGenres.length
+    ? movieGenres.reduce((total, genre) => total + (behaviorPortrait.genreAffinity.get(genre) || 0), 0) / movieGenres.length
+    : 0
+
+  const era = getReleaseEra(movie.release_date)
+  const eraScore = behaviorPortrait.eraAffinity.get(era) || 0
+  const style = inferMovieStyle(movie)
+  const preferredStyle = preferences.discoveryStyle || 'balanced'
+  const styleScore = Math.max(
+    0,
+    Math.min(
+      1,
+      style.quality * behaviorPortrait.styleAffinity.quality * (preferredStyle === 'quality' ? 1.1 : 1) +
+        style.trending * behaviorPortrait.styleAffinity.trending * (preferredStyle === 'trending' ? 1.1 : 1) +
+        style.balanced * behaviorPortrait.styleAffinity.balanced
+    )
+  )
+
+  return Number((genreScore * 0.5 + eraScore * 0.2 + styleScore * 0.3).toFixed(6))
 }
 
 function toScoreMap(rows) {
@@ -368,7 +498,10 @@ function normalizeWeightConfig(config) {
     item_cf_weight: Math.max(Number(config.item_cf_weight) || 0, 0),
     user_cf_weight: Math.max(Number(config.user_cf_weight) || 0, 0),
     popularity_weight: Math.max(Number(config.popularity_weight) || 0, 0),
-    preference_weight: Math.max(Number(config.preference_weight) || 0, 0)
+    preference_weight: Math.max(Number(config.preference_weight) || 0, 0),
+    behavior_profile_weight: Math.max(Number(config.behavior_profile_weight) || 0, 0),
+    diversity_weight: Math.max(Number(config.diversity_weight) || 0, 0),
+    random_weight: Math.max(Number(config.random_weight) || 0, 0)
   }
 
   const sum = Object.values(values).reduce((total, item) => total + item, 0)
@@ -380,7 +513,10 @@ function normalizeWeightConfig(config) {
     item_cf_weight: values.item_cf_weight / sum,
     user_cf_weight: values.user_cf_weight / sum,
     popularity_weight: values.popularity_weight / sum,
-    preference_weight: values.preference_weight / sum
+    preference_weight: values.preference_weight / sum,
+    behavior_profile_weight: values.behavior_profile_weight / sum,
+    diversity_weight: values.diversity_weight / sum,
+    random_weight: values.random_weight / sum
   }
 }
 
@@ -863,6 +999,24 @@ app.get('/api/recommend', async (req, res) => {
     }
 
     const userPreferences = normalizePreferences(safeJsonParse(activeResult.user.preference_profile, {}))
+    const userBehaviorDetailRows = await query(
+      `
+        SELECT
+          b.movie_id,
+          b.behavior_type,
+          b.score,
+          b.created_at,
+          m.genres,
+          m.release_date,
+          m.vote_average,
+          m.popularity
+        FROM user_movie_behaviors b
+        JOIN movies m ON m.id = b.movie_id
+        WHERE b.username = ?
+      `,
+      [username]
+    )
+    const behaviorPortrait = buildBehaviorPortrait(userBehaviorDetailRows)
     const userBehaviorRows = await query(
       `
         SELECT movie_id, SUM(score) AS total_score
@@ -880,13 +1034,19 @@ app.get('/api/recommend', async (req, res) => {
 
     const preferenceMap = new Map()
     const popularityMap = new Map()
+    const behaviorPortraitMap = new Map()
+    const diversityMap = new Map()
     filteredCandidates.forEach((movie) => {
       preferenceMap.set(movie.id, calculatePreferenceScore(movie, userPreferences))
       popularityMap.set(movie.id, Number(movie.popularity) || 0)
+      behaviorPortraitMap.set(movie.id, calculateBehaviorPortraitScore(movie, behaviorPortrait, userPreferences))
+      diversityMap.set(movie.id, 1 - normalizeToUnit(Number(movie.popularity) || 0, 100))
     })
 
     const normalizedPreferenceMap = buildNormalizedMap(preferenceMap)
     const normalizedPopularityMap = buildNormalizedMap(popularityMap)
+    const normalizedBehaviorPortraitMap = buildNormalizedMap(behaviorPortraitMap)
+    const normalizedDiversityMap = buildNormalizedMap(diversityMap)
 
     if (!userBehaviorRows.length) {
       const ranked = filteredCandidates
@@ -899,7 +1059,10 @@ app.get('/api/recommend', async (req, res) => {
           genres: movie.genres,
           recommendation_score: Number((
             normalizedPreferenceMap.get(movie.id) * Math.max(config.preference_weight, 0.6) +
-            normalizedPopularityMap.get(movie.id) * Math.max(config.popularity_weight, 0.2)
+            normalizedPopularityMap.get(movie.id) * Math.max(config.popularity_weight, 0.15) +
+            normalizedBehaviorPortraitMap.get(movie.id) * Math.max(config.behavior_profile_weight, 0.15) +
+            normalizedDiversityMap.get(movie.id) * Math.max(config.diversity_weight, 0.05) +
+            (Math.random() - 0.5) * Math.max(config.random_weight, 0.03) * 0.1
           ).toFixed(6))
         }))
         .sort((a, b) => b.recommendation_score - a.recommendation_score)
@@ -930,7 +1093,10 @@ app.get('/api/recommend', async (req, res) => {
           (normalizedItemMap.get(movie.id) || 0) * config.item_cf_weight +
           (normalizedUserMap.get(movie.id) || 0) * config.user_cf_weight +
           (normalizedPopularityMap.get(movie.id) || 0) * config.popularity_weight +
-          (normalizedPreferenceMap.get(movie.id) || 0) * config.preference_weight
+          (normalizedPreferenceMap.get(movie.id) || 0) * config.preference_weight +
+          (normalizedBehaviorPortraitMap.get(movie.id) || 0) * config.behavior_profile_weight +
+          (normalizedDiversityMap.get(movie.id) || 0) * config.diversity_weight +
+          (Math.random() - 0.5) * config.random_weight * 0.08
 
         return {
           id: movie.id,
@@ -1126,14 +1292,20 @@ app.post('/api/admin/recommendation-config', async (req, res) => {
     item_cf_weight: itemCfWeight,
     user_cf_weight: userCfWeight,
     popularity_weight: popularityWeight,
-    preference_weight: preferenceWeight
+    preference_weight: preferenceWeight,
+    behavior_profile_weight: behaviorProfileWeight,
+    diversity_weight: diversityWeight,
+    random_weight: randomWeight
   } = req.body || {}
 
   const nextConfig = {
     item_cf_weight: Number(itemCfWeight),
     user_cf_weight: Number(userCfWeight),
     popularity_weight: Number(popularityWeight),
-    preference_weight: Number(preferenceWeight)
+    preference_weight: Number(preferenceWeight),
+    behavior_profile_weight: Number(behaviorProfileWeight),
+    diversity_weight: Number(diversityWeight),
+    random_weight: Number(randomWeight)
   }
 
   const invalid = Object.values(nextConfig).some((item) => Number.isNaN(item) || item < 0)
@@ -1152,7 +1324,16 @@ app.post('/api/admin/recommendation-config', async (req, res) => {
     await query(
       `
         UPDATE recommendation_configs
-        SET item_cf_weight = ?, user_cf_weight = ?, popularity_weight = ?, preference_weight = ?, updated_at = ?, updated_by = ?
+        SET
+          item_cf_weight = ?,
+          user_cf_weight = ?,
+          popularity_weight = ?,
+          preference_weight = ?,
+          behavior_profile_weight = ?,
+          diversity_weight = ?,
+          random_weight = ?,
+          updated_at = ?,
+          updated_by = ?
         WHERE id = 1
       `,
       [
@@ -1160,6 +1341,9 @@ app.post('/api/admin/recommendation-config', async (req, res) => {
         nextConfig.user_cf_weight,
         nextConfig.popularity_weight,
         nextConfig.preference_weight,
+        nextConfig.behavior_profile_weight,
+        nextConfig.diversity_weight,
+        nextConfig.random_weight,
         Date.now(),
         adminUsername
       ]
